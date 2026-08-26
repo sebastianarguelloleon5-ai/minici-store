@@ -3,16 +3,28 @@ import os
 import pandas as pd
 import streamlit as st
 from datetime import datetime
+from PIL import Image
 
-# Configuración de página
-st.set_page_config(
-    page_title="Minici Store", 
-    page_icon="🛍️", 
-    layout="centered", 
-    initial_sidebar_state="collapsed"
-)
+# 1. Configuración de página con Logo Oficial
+try:
+    # Intenta cargar la imagen del logo para el icono de la pestaña / acceso directo
+    logo_icon = Image.open("logo.jpg")
+    st.set_page_config(
+        page_title="Minici Store",
+        page_icon=logo_icon,
+        layout="centered",
+        initial_sidebar_state="collapsed"
+    )
+except Exception:
+    # Respaldo si no encuentra 'logo.jpg'
+    st.set_page_config(
+        page_title="Minici Store",
+        page_icon="🛍️",
+        layout="centered",
+        initial_sidebar_state="collapsed"
+    )
 
-# 1. Base de datos SQLite y Directorios
+# 2. Base de datos SQLite y Directorios
 conn = sqlite3.connect("minici_store.db", check_same_thread=False)
 c = conn.cursor()
 
@@ -69,7 +81,7 @@ if c.fetchone()[0] == 0:
     c.execute("INSERT INTO notificaciones (id_cliente, titulo, mensaje, fecha) VALUES ('MIN-0001', '¡Bienvenida!', 'Tu cuenta ha sido creada con éxito en Minici Store.', '2026-06-06')")
     conn.commit()
 
-# 2. Estilos CSS 100% Compatibles (Compu y Celular)
+# 3. Estilos CSS 100% Compatibles (Compu y Celular)
 st.markdown("""
 <style>
     .stApp {
@@ -166,7 +178,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. Control de Sesión
+# 4. Control de Sesión
 if "user_role" not in st.session_state:
     st.session_state.user_role = None
 if "current_client" not in st.session_state:

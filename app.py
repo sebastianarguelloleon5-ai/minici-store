@@ -7,23 +7,19 @@ from PIL import Image
 
 # 1. Configuración de página con Logo Oficial
 try:
-    # Intenta cargar la imagen del logo para el icono de la pestaña / acceso directo
-    logo_icon = Image.open("logo.jpg")
     st.set_page_config(
         page_title="Minici Store",
-        page_icon=logo_icon,
+        page_icon="logo.jpg",
         layout="centered",
         initial_sidebar_state="collapsed"
     )
 except Exception:
-    # Respaldo si no encuentra 'logo.jpg'
     st.set_page_config(
         page_title="Minici Store",
         page_icon="🛍️",
         layout="centered",
         initial_sidebar_state="collapsed"
     )
-
 # 2. Base de datos SQLite y Directorios
 conn = sqlite3.connect("minici_store.db", check_same_thread=False)
 c = conn.cursor()

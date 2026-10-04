@@ -1,4 +1,6 @@
 streamlit
 pandas
-Pillow
+pillow
 openpyxl
+numpy
+zxing-cpp

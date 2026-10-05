@@ -8,6 +8,7 @@ import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 import streamlit as st
 import urllib.parse
+import html
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -133,7 +134,6 @@ def generar_factura_imagen(id_cliente):
 
     nombre_cliente, telefono = res_cli
     
-    # Datos de Caja si es Emprendedor
     c.execute("SELECT nombre_caja, precio_caja FROM cajas_emprendedores WHERE id_cliente = ?", (id_cliente,))
     res_caja = c.fetchone()
     nombre_caja, precio_caja = (res_caja[0], res_caja[1] or 0.0) if res_caja else (None, 0.0)
@@ -242,71 +242,169 @@ def generar_factura_imagen(id_cliente):
 # -------------------------------------------------------------
 # 3. ESTILOS CSS GLOBALES
 # -------------------------------------------------------------
+_card_seq = [0]
+
+
+def card(kind="card"):
+    """Tarjeta real (contenedor con borde). 'sub' = tarjeta interna más ligera."""
+    _card_seq[0] += 1
+    try:
+        return st.container(border=True, key=f"{kind}_{_card_seq[0]}")
+    except TypeError:  # versiones antiguas de Streamlit sin parámetro key
+        return st.container(border=True)
+
+
 st.markdown(
     """
 <style>
-   .stApp {
-       background-color: #fdf2f8 !important;
-       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-       color: #0f172a !important;
+   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap');
+
+   :root {
+       --brand: #F3B2C9;
+       --brand-soft: #FDE8F0;
+       --raspberry: #BE185D;
+       --raspberry-dark: #9D174D;
+       --plum: #831843;
+       --ink: #2B1B24;
+       --muted: #7C6572;
+       --line: #F3D2E0;
+       --paper: #FFF6FA;
    }
-   
+
+   /* ---------- Base ---------- */
+   .stApp {
+       background-color: var(--paper) !important;
+       color: var(--ink) !important;
+   }
+   html, body, .stApp, p, label, li, input, textarea, button,
+   [data-testid="stMarkdownContainer"] {
+       font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+   }
+   h1, h2, h3, h4, h5, h6 {
+       font-family: 'Fraunces', Georgia, serif !important;
+       letter-spacing: -0.01em;
+   }
+
    #MainMenu, footer, header {visibility: hidden;}
 
-   label, p, span, div, h1, h2, h3, h4, h5, h6 {
-       color: #0f172a;
+   .block-container {
+       padding-top: 1.6rem !important;
+       padding-bottom: 3rem !important;
    }
 
+   label, p, span, div, h1, h2, h3, h4, h5, h6 {
+       color: var(--ink);
+   }
+   [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] * {
+       color: var(--muted) !important;
+   }
+   hr {
+       border-color: var(--line) !important;
+   }
+
+   /* ---------- Encabezado de la app ---------- */
+   .app-header {
+       display: flex;
+       align-items: baseline;
+       flex-wrap: wrap;
+       gap: 4px 12px;
+       padding-top: 4px;
+   }
+   .app-brand {
+       font-family: 'Fraunces', Georgia, serif;
+       font-size: 28px;
+       font-weight: 700;
+       color: var(--raspberry) !important;
+       line-height: 1.15;
+   }
+   .app-role {
+       font-size: 14px;
+       color: var(--muted) !important;
+   }
+
+   .login-hero {
+       text-align: center;
+       margin: 6px 0 18px;
+   }
+   .login-hero h2 {
+       color: var(--raspberry) !important;
+       font-size: 28px;
+       margin-bottom: 4px;
+   }
+   .login-hero p {
+       color: var(--muted) !important;
+       font-size: 15px;
+       margin: 0;
+   }
+
+   /* ---------- Banner de sección ---------- */
+   .top-banner {
+       background: #ffffff;
+       border: 1px solid var(--line);
+       border-left: 6px solid var(--brand);
+       padding: 16px 20px;
+       border-radius: 16px;
+       margin-bottom: 18px;
+       box-shadow: 0 1px 3px rgba(131, 24, 67, 0.06);
+   }
+   .top-banner * {
+       color: var(--plum) !important;
+       font-family: 'Fraunces', Georgia, serif;
+   }
+
+   .section-title {
+       font-size: 13.5px;
+       font-weight: 600;
+       color: var(--raspberry-dark) !important;
+       margin: 12px 0 4px;
+   }
+
+   /* ---------- Tarjetas (st.container con borde) ---------- */
+   div[class*="st-key-card_"],
+   div[data-testid="stVerticalBlockBorderWrapper"]:has(> div[class*="st-key-card_"]) {
+       background: #ffffff !important;
+       border: 1px solid var(--line) !important;
+       border-radius: 18px !important;
+       box-shadow: 0 4px 18px rgba(190, 24, 93, 0.06) !important;
+   }
+   div[class*="st-key-sub_"],
+   div[data-testid="stVerticalBlockBorderWrapper"]:has(> div[class*="st-key-sub_"]) {
+       background: #FFF9FC !important;
+       border: 1px solid var(--line) !important;
+       border-radius: 14px !important;
+       box-shadow: none !important;
+   }
+   /* evita doble borde cuando Streamlit envuelve el contenedor */
+   div[data-testid="stVerticalBlockBorderWrapper"] > div[class*="st-key-card_"],
+   div[data-testid="stVerticalBlockBorderWrapper"] > div[class*="st-key-sub_"] {
+       background: transparent !important;
+       border: none !important;
+       box-shadow: none !important;
+       border-radius: 0 !important;
+   }
+
+   /* ---------- Métricas ---------- */
    div[data-testid="stMetric"] {
        background-color: #ffffff !important;
-       padding: 12px 16px !important;
-       border-radius: 12px !important;
-       border: 1px solid #F3B2C9 !important;
-       box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04) !important;
+       padding: 14px 16px !important;
+       border-radius: 16px !important;
+       border: 1px solid var(--line) !important;
+       box-shadow: none !important;
    }
    div[data-testid="stMetricLabel"] > div,
    div[data-testid="stMetricLabel"] label,
    div[data-testid="stMetricLabel"] p {
-       color: #9d174d !important;
-       font-weight: 700 !important;
-       font-size: 12px !important;
-       text-transform: uppercase !important;
+       color: var(--raspberry-dark) !important;
+       font-weight: 600 !important;
+       font-size: 13px !important;
    }
    div[data-testid="stMetricValue"] > div {
-       color: #831843 !important;
-       font-weight: 800 !important;
+       color: var(--plum) !important;
+       font-family: 'Fraunces', Georgia, serif !important;
+       font-weight: 700 !important;
    }
 
-   .top-banner {
-       background: linear-gradient(135deg, #F3B2C9 0%, #e3a2b9 100%);
-       padding: 18px;
-       border-radius: 14px;
-       color: #0f172a !important;
-       margin-bottom: 20px;
-       box-shadow: 0 4px 12px rgba(243, 178, 201, 0.4);
-   }
-   .top-banner * {
-       color: #0f172a !important;
-   }
-
-   .form-card {
-       background: #ffffff !important;
-       padding: 22px;
-       border-radius: 14px;
-       box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
-       margin-bottom: 20px;
-       border: 1px solid #F3B2C9;
-   }
-
-   .section-title {
-       font-size: 13px;
-       font-weight: 700;
-       color: #be185d !important;
-       margin-bottom: 6px;
-       margin-top: 10px;
-       text-transform: uppercase;
-   }
-
+   /* ---------- Campos de formulario ---------- */
    div[data-baseweb="select"],
    div[data-baseweb="select"] *,
    div[data-baseweb="input"],
@@ -317,43 +415,100 @@ st.markdown(
    .stTextInput > div > div,
    .stNumberInput > div > div {
        background-color: #ffffff !important;
-       color: #0f172a !important;
-       fill: #0f172a !important;
+       color: var(--ink) !important;
+       fill: var(--ink) !important;
+   }
+   div[data-baseweb="input"],
+   div[data-baseweb="select"] > div,
+   div[data-baseweb="textarea"] {
+       border-radius: 10px !important;
+       border: 1px solid #EDC3D5 !important;
+   }
+   div[data-baseweb="input"]:focus-within,
+   div[data-baseweb="select"] > div:focus-within,
+   div[data-baseweb="textarea"]:focus-within {
+       border-color: var(--raspberry) !important;
+       box-shadow: 0 0 0 3px rgba(190, 24, 93, 0.15) !important;
    }
 
    input, textarea, [role="option"], [role="combobox"] {
-       color: #0f172a !important;
-       -webkit-text-fill-color: #0f172a !important;
+       color: var(--ink) !important;
+       -webkit-text-fill-color: var(--ink) !important;
        background-color: #ffffff !important;
    }
 
    div[data-baseweb="popover"],
    div[data-baseweb="popover"] * {
        background-color: #ffffff !important;
-       color: #0f172a !important;
+       color: var(--ink) !important;
    }
 
    .stNumberInput button {
-       background-color: #F3B2C9 !important;
-       color: #0f172a !important;
+       background-color: var(--brand-soft) !important;
+       color: var(--plum) !important;
        border: none !important;
    }
 
-   div.stButton > button:first-child, div.stDownloadButton > button:first-child {
-       background-color: #F3B2C9 !important;
-       color: #0f172a !important;
-       border-radius: 10px;
-       font-weight: 700;
+   /* ---------- Botones ---------- */
+   div.stButton > button:first-child {
+       background-color: var(--raspberry) !important;
+       color: #ffffff !important;
+       border-radius: 12px;
+       font-weight: 600;
        border: none;
        padding: 10px 18px;
        width: 100%;
        font-size: 15px;
+       box-shadow: 0 2px 8px rgba(190, 24, 93, 0.25);
+       transition: background-color 0.15s ease, transform 0.05s ease;
    }
-   div.stButton > button:first-child *, div.stDownloadButton > button:first-child * {
-       color: #0f172a !important;
+   div.stButton > button:first-child * {
+       color: #ffffff !important;
    }
-   div.stButton > button:first-child:hover, div.stDownloadButton > button:first-child:hover {
-       background-color: #e3a2b9 !important;
+   div.stButton > button:first-child:hover {
+       background-color: var(--raspberry-dark) !important;
+   }
+   div.stButton > button:first-child:active {
+       transform: translateY(1px);
+   }
+
+   div.stDownloadButton > button:first-child {
+       background-color: var(--brand-soft) !important;
+       color: var(--plum) !important;
+       border-radius: 12px;
+       font-weight: 600;
+       border: 1px solid var(--brand) !important;
+       padding: 10px 18px;
+       width: 100%;
+       font-size: 15px;
+   }
+   div.stDownloadButton > button:first-child * {
+       color: var(--plum) !important;
+   }
+   div.stDownloadButton > button:first-child:hover {
+       background-color: var(--brand) !important;
+   }
+
+   /* Botones secundarios (salir / eliminar) */
+   .st-key-btn_salir_admin div.stButton > button:first-child,
+   .st-key-btn_salir_client div.stButton > button:first-child,
+   .st-key-btn_eliminar_pedido div.stButton > button:first-child,
+   .st-key-btn_inv_del div.stButton > button:first-child {
+       background-color: #ffffff !important;
+       border: 1.5px solid var(--brand) !important;
+       box-shadow: none !important;
+   }
+   .st-key-btn_salir_admin div.stButton > button:first-child *,
+   .st-key-btn_salir_client div.stButton > button:first-child *,
+   .st-key-btn_eliminar_pedido div.stButton > button:first-child *,
+   .st-key-btn_inv_del div.stButton > button:first-child * {
+       color: var(--raspberry) !important;
+   }
+   .st-key-btn_salir_admin div.stButton > button:first-child:hover,
+   .st-key-btn_salir_client div.stButton > button:first-child:hover,
+   .st-key-btn_eliminar_pedido div.stButton > button:first-child:hover,
+   .st-key-btn_inv_del div.stButton > button:first-child:hover {
+       background-color: var(--brand-soft) !important;
    }
 
    .btn-whatsapp {
@@ -362,51 +517,79 @@ st.markdown(
        background-color: #25D366 !important;
        color: #ffffff !important;
        text-align: center;
-       font-weight: bold;
+       font-weight: 600;
        padding: 10px 15px;
-       border-radius: 10px;
+       border-radius: 12px;
        text-decoration: none;
        font-size: 15px;
        margin-top: 10px;
-       box-shadow: 0 3px 6px rgba(0,0,0,0.1);
+       box-shadow: 0 3px 8px rgba(37, 211, 102, 0.3);
    }
    .btn-whatsapp:hover {
        background-color: #1da851 !important;
        color: #ffffff !important;
    }
 
+   /* ---------- Menús tipo pastilla ---------- */
    div[data-testid="stRadio"] > div {
        flex-direction: row !important;
        gap: 6px !important;
        flex-wrap: wrap !important;
    }
-   div[data-testid="stRadio"] label {
+   div[data-testid="stRadio"] label:not([data-testid="stWidgetLabel"]) {
        background-color: #ffffff !important;
-       border: 2px solid #F3B2C9 !important;
-       padding: 6px 12px !important;
-       border-radius: 10px !important;
-       font-weight: 700 !important;
+       border: 1.5px solid var(--line) !important;
+       padding: 6px 14px !important;
+       border-radius: 999px !important;
+       font-weight: 600 !important;
        cursor: pointer !important;
+       transition: border-color 0.15s ease, background-color 0.15s ease;
    }
-   div[data-testid="stRadio"] label p,
-   div[data-testid="stRadio"] label span,
-   div[data-testid="stRadio"] label div {
-       color: #be185d !important;
-       -webkit-text-fill-color: #be185d !important;
-       font-size: 13px !important;
+   div[data-testid="stRadio"] label:not([data-testid="stWidgetLabel"]):hover {
+       border-color: var(--brand) !important;
+   }
+   div[data-testid="stRadio"] label:not([data-testid="stWidgetLabel"]) p,
+   div[data-testid="stRadio"] label:not([data-testid="stWidgetLabel"]) span,
+   div[data-testid="stRadio"] label:not([data-testid="stWidgetLabel"]) div {
+       color: var(--raspberry) !important;
+       -webkit-text-fill-color: var(--raspberry) !important;
+       font-size: 13.5px !important;
    }
    div[data-testid="stRadio"] label:has(input:checked) {
-       background-color: #F3B2C9 !important;
-       border-color: #F3B2C9 !important;
+       background-color: var(--raspberry) !important;
+       border-color: var(--raspberry) !important;
    }
    div[data-testid="stRadio"] label:has(input:checked) p,
    div[data-testid="stRadio"] label:has(input:checked) span,
    div[data-testid="stRadio"] label:has(input:checked) div {
-       color: #0f172a !important;
-       -webkit-text-fill-color: #0f172a !important;
+       color: #ffffff !important;
+       -webkit-text-fill-color: #ffffff !important;
    }
    div[data-testid="stRadio"] input[type="radio"] {
        display: none !important;
+   }
+
+   /* ---------- Tablas, alertas, expanders, imágenes ---------- */
+   div[data-testid="stDataFrame"] {
+       border: 1px solid var(--line);
+       border-radius: 12px;
+       overflow: hidden;
+   }
+   div[data-testid="stAlert"] {
+       border-radius: 12px !important;
+   }
+   div[data-testid="stExpander"] {
+       background: #ffffff !important;
+       border: 1px solid var(--line) !important;
+       border-radius: 14px !important;
+   }
+   div[data-testid="stImage"] img {
+       border-radius: 12px;
+   }
+   div[data-testid="stForm"] {
+       border: 1px solid var(--line) !important;
+       border-radius: 14px !important;
+       background: #FFFBFD !important;
    }
 </style>
 """,
@@ -441,43 +624,43 @@ if st.session_state.user_role is None:
 
     st.markdown(
         """
-        <div style="text-align: center; margin-bottom: 15px;">
-            <h2 style="color: #be185d; font-size: 22px;">¡Bienvenidos a Minici Store!</h2>
-            <p style="color: #64748b; font-size: 14px;">Ingresa tu código de acceso para continuar.</p>
+        <div class="login-hero">
+            <h2>¡Bienvenidos a Minici Store!</h2>
+            <p>Ingresa tu código de acceso para continuar.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="form-card">', unsafe_allow_html=True)
-    codigo_ingresado = st.text_input("Código de acceso", placeholder="Ej. MIN-0001 o EMP-0001", key="login_input")
+    with card():
+        codigo_ingresado = st.text_input("Código de acceso", placeholder="Ej. MIN-0001 o EMP-0001", key="login_input")
 
-    st.write("")
-    if st.button("🚀 Ingresar al Sistema", key="btn_login"):
-        codigo_limpio = codigo_ingresado.strip().upper()
+        st.write("")
+        if st.button("🚀 Ingresar al Sistema", key="btn_login"):
+            codigo_limpio = codigo_ingresado.strip().upper()
         
-        if codigo_limpio == "KENDRA5412":
-            st.session_state.user_role = "admin"
-            st.rerun()
-        else:
-            c.execute("SELECT id_cliente FROM clientes WHERE UPPER(id_cliente) = ?", (codigo_limpio,))
-            res = c.fetchone()
-            if res:
-                st.session_state.user_role = "client"
-                st.session_state.current_client = res[0]
+            if codigo_limpio == "KENDRA5412":
+                st.session_state.user_role = "admin"
                 st.rerun()
             else:
-                st.error("❌ Código incorrecto o no registrado.")
-    st.markdown("</div>", unsafe_allow_html=True)
+                c.execute("SELECT id_cliente FROM clientes WHERE UPPER(id_cliente) = ?", (codigo_limpio,))
+                res = c.fetchone()
+                if res:
+                    st.session_state.user_role = "client"
+                    st.session_state.current_client = res[0]
+                    st.rerun()
+                else:
+                    st.error("❌ Código incorrecto o no registrado.")
 
 # -------------------------------------------------------------
 # 5. PANEL DE ADMINISTRADOR
 # -------------------------------------------------------------
 elif st.session_state.user_role == "admin":
-    col_a, col_b = st.columns([3, 1])
+    col_a, col_b = st.columns([4, 1])
     with col_a:
         st.markdown(
-            "<h3 style='color: #be185d;'>⚙️ Panel Administrador</h3>", unsafe_allow_html=True
+            '<div class="app-header"><span class="app-brand">Minici Store</span><span class="app-role">Panel administrador</span></div>',
+            unsafe_allow_html=True,
         )
     with col_b:
         if st.button("🚪 Salir", key="btn_salir_admin"):
@@ -522,98 +705,97 @@ elif st.session_state.user_role == "admin":
                 unsafe_allow_html=True,
             )
 
-            st.markdown('<div class="form-card">', unsafe_allow_html=True)
+            with card():
             
-            filtro_tipo_cli = st.radio("Filtrar Tipo de Cliente:", ["Todos", "Clientas Regulares (MIN)", "Emprendedores (EMP)"], horizontal=True, key="compra_filtro_cli")
+                filtro_tipo_cli = st.radio("Filtrar Tipo de Cliente:", ["Todos", "Clientas Regulares (MIN)", "Emprendedores (EMP)"], horizontal=True, key="compra_filtro_cli")
             
-            query_cli = """SELECT c.id_cliente || ' — ' || c.nombre || COALESCE(' (' || e.nombre_caja || ')', '') AS display, c.id_cliente 
-                           FROM clientes c 
-                           LEFT JOIN cajas_emprendedores e ON c.id_cliente = e.id_cliente"""
-            if filtro_tipo_cli == "Clientas Regulares (MIN)":
-                query_cli += " WHERE c.id_cliente LIKE 'MIN-%'"
-            elif filtro_tipo_cli == "Emprendedores (EMP)":
-                query_cli += " WHERE c.id_cliente LIKE 'EMP-%'"
+                query_cli = """SELECT c.id_cliente || ' — ' || c.nombre || COALESCE(' (' || e.nombre_caja || ')', '') AS display, c.id_cliente 
+                               FROM clientes c 
+                               LEFT JOIN cajas_emprendedores e ON c.id_cliente = e.id_cliente"""
+                if filtro_tipo_cli == "Clientas Regulares (MIN)":
+                    query_cli += " WHERE c.id_cliente LIKE 'MIN-%'"
+                elif filtro_tipo_cli == "Emprendedores (EMP)":
+                    query_cli += " WHERE c.id_cliente LIKE 'EMP-%'"
 
-            clientes_df = pd.read_sql(query_cli, conn)
+                clientes_df = pd.read_sql(query_cli, conn)
 
-            if clientes_df.empty:
-                st.warning("No hay clientes registrados en esta categoría.")
-            else:
-                st.markdown('<p class="section-title">1. Seleccionar Cliente / Emprendedor</p>', unsafe_allow_html=True)
-                cli_selected = st.selectbox("Cliente", clientes_df["display"], label_visibility="collapsed", key="compra_cli")
-                id_cliente = clientes_df[clientes_df["display"] == cli_selected]["id_cliente"].values[0]
+                if clientes_df.empty:
+                    st.warning("No hay clientes registrados en esta categoría.")
+                else:
+                    st.markdown('<p class="section-title">1. Seleccionar Cliente / Emprendedor</p>', unsafe_allow_html=True)
+                    cli_selected = st.selectbox("Cliente", clientes_df["display"], label_visibility="collapsed", key="compra_cli")
+                    id_cliente = clientes_df[clientes_df["display"] == cli_selected]["id_cliente"].values[0]
 
-                col_tienda, col_cat = st.columns(2)
-                with col_tienda:
-                    st.markdown('<p class="section-title">2. Tienda</p>', unsafe_allow_html=True)
-                    tienda_sel = st.selectbox("Tienda", ["Zara", "Guess", "Adidas", "Shein", "Amazon", "Nike", "Victoria's Secret", "Otra"], label_visibility="collapsed", key="compra_tienda")
-                    tienda = st.text_input("Escribe tienda", placeholder="Tienda...") if tienda_sel == "Otra" else tienda_sel
+                    col_tienda, col_cat = st.columns(2)
+                    with col_tienda:
+                        st.markdown('<p class="section-title">2. Tienda</p>', unsafe_allow_html=True)
+                        tienda_sel = st.selectbox("Tienda", ["Zara", "Guess", "Adidas", "Shein", "Amazon", "Nike", "Victoria's Secret", "Otra"], label_visibility="collapsed", key="compra_tienda")
+                        tienda = st.text_input("Escribe tienda", placeholder="Tienda...") if tienda_sel == "Otra" else tienda_sel
 
-                with col_cat:
-                    st.markdown('<p class="section-title">3. Categoría</p>', unsafe_allow_html=True)
-                    cat_sel = st.selectbox("Categoría", ["Vestido", "Bolso", "Tenis", "Blusa", "Cosméticos", "Accesorios", "Otra"], label_visibility="collapsed", key="compra_cat")
-                    categoria = st.text_input("Escribe categoría", placeholder="Categoría...") if cat_sel == "Otra" else cat_sel
+                    with col_cat:
+                        st.markdown('<p class="section-title">3. Categoría</p>', unsafe_allow_html=True)
+                        cat_sel = st.selectbox("Categoría", ["Vestido", "Bolso", "Tenis", "Blusa", "Cosméticos", "Accesorios", "Otra"], label_visibility="collapsed", key="compra_cat")
+                        categoria = st.text_input("Escribe categoría", placeholder="Categoría...") if cat_sel == "Otra" else cat_sel
 
-                st.markdown('<p class="section-title">4. Producto / Artículo</p>', unsafe_allow_html=True)
-                producto = st.text_input("Producto", placeholder="Ej. Vestido estampado", label_visibility="collapsed", key="compra_prod")
+                    st.markdown('<p class="section-title">4. Producto / Artículo</p>', unsafe_allow_html=True)
+                    producto = st.text_input("Producto", placeholder="Ej. Vestido estampado", label_visibility="collapsed", key="compra_prod")
 
-                col_c, col_d = st.columns(2)
-                with col_c:
-                    st.markdown('<p class="section-title">5. Precio (₡ CRC)</p>', unsafe_allow_html=True)
-                    precio = st.number_input("Precio", min_value=0.0, value=15000.0, step=500.0, label_visibility="collapsed", key="compra_precio")
-                with col_d:
-                    st.markdown('<p class="section-title">6. Cantidad</p>', unsafe_allow_html=True)
-                    cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1, label_visibility="collapsed", key="compra_cant")
+                    col_c, col_d = st.columns(2)
+                    with col_c:
+                        st.markdown('<p class="section-title">5. Precio (₡ CRC)</p>', unsafe_allow_html=True)
+                        precio = st.number_input("Precio", min_value=0.0, value=15000.0, step=500.0, label_visibility="collapsed", key="compra_precio")
+                    with col_d:
+                        st.markdown('<p class="section-title">6. Cantidad</p>', unsafe_allow_html=True)
+                        cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1, label_visibility="collapsed", key="compra_cant")
 
-                st.markdown('<p class="section-title">7. Estado del producto</p>', unsafe_allow_html=True)
-                estado = st.selectbox("Estado", ["🇺🇸 Comprado en USA", "📦 En tránsito", "🇨🇷 Recibido en CR", "✅ Entregado"], label_visibility="collapsed", key="compra_estado")
+                    st.markdown('<p class="section-title">7. Estado del producto</p>', unsafe_allow_html=True)
+                    estado = st.selectbox("Estado", ["🇺🇸 Comprado en USA", "📦 En tránsito", "🇨🇷 Recibido en CR", "✅ Entregado"], label_visibility="collapsed", key="compra_estado")
 
-                st.markdown('<p class="section-title">8. Fotos del producto</p>', unsafe_allow_html=True)
-                metodo_foto = st.radio("Cargar foto desde:", ["Subir archivo", "Usar cámara"], horizontal=True, key="compra_foto_modo")
-                foto_file = st.file_uploader("Subir foto", type=["jpg", "png", "jpeg"], label_visibility="collapsed", key="compra_file") if metodo_foto == "Subir archivo" else st.camera_input("Tomar foto", key="compra_cam")
+                    st.markdown('<p class="section-title">8. Fotos del producto</p>', unsafe_allow_html=True)
+                    metodo_foto = st.radio("Cargar foto desde:", ["Subir archivo", "Usar cámara"], horizontal=True, key="compra_foto_modo")
+                    foto_file = st.file_uploader("Subir foto", type=["jpg", "png", "jpeg"], label_visibility="collapsed", key="compra_file") if metodo_foto == "Subir archivo" else st.camera_input("Tomar foto", key="compra_cam")
 
-                st.markdown('<p class="section-title">9. Observaciones</p>', unsafe_allow_html=True)
-                observaciones = st.text_area("Observaciones", height=70, label_visibility="collapsed", key="compra_obs")
+                    st.markdown('<p class="section-title">9. Observaciones</p>', unsafe_allow_html=True)
+                    observaciones = st.text_area("Observaciones", height=70, label_visibility="collapsed", key="compra_obs")
 
-                st.write("")
-                if st.button("💾 Guardar compra", key="btn_save_compra"):
-                    if not producto or not tienda or not categoria:
-                        st.error("Debes completar el producto, la tienda y la categoría.")
-                    else:
-                        prod_clean = producto.strip().capitalize()
-                        tienda_clean = tienda.strip().capitalize()
-                        cat_clean = categoria.strip().capitalize()
-                        obs_clean = observaciones.strip().capitalize() if observaciones else ""
+                    st.write("")
+                    if st.button("💾 Guardar compra", key="btn_save_compra"):
+                        if not producto or not tienda or not categoria:
+                            st.error("Debes completar el producto, la tienda y la categoría.")
+                        else:
+                            prod_clean = producto.strip().capitalize()
+                            tienda_clean = tienda.strip().capitalize()
+                            cat_clean = categoria.strip().capitalize()
+                            obs_clean = observaciones.strip().capitalize() if observaciones else ""
 
-                        foto_filename = ""
-                        if foto_file:
-                            foto_filename = f"{id_cliente}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
-                            filepath = os.path.join("fotos_productos", foto_filename)
-                            with open(filepath, "wb") as f:
-                                f.write(foto_file.getbuffer())
+                            foto_filename = ""
+                            if foto_file:
+                                foto_filename = f"{id_cliente}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+                                filepath = os.path.join("fotos_productos", foto_filename)
+                                with open(filepath, "wb") as f:
+                                    f.write(foto_file.getbuffer())
 
-                        c.execute("""INSERT INTO productos (id_cliente, tienda, categoria, descripcion, precio, moneda, cantidad, estado, observaciones, foto_path)
-                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                                  (id_cliente, tienda_clean, cat_clean, prod_clean, precio, "CRC", cantidad, estado, obs_clean, foto_filename))
-                        c.execute("""INSERT INTO notificaciones (id_cliente, titulo, mensaje, fecha) VALUES (?, ?, ?, ?)""",
-                                  (id_cliente, "Nuevo pedido registrado", f"Se agregó '{prod_clean}' ({tienda_clean}) a tus compras por ₡{precio:,.0f}.", datetime.now().strftime("%Y-%m-%d %H:%M")))
-                        conn.commit()
-                        st.success(f"¡Compra de '{prod_clean}' registrada exitosamente para {id_cliente}!")
+                            c.execute("""INSERT INTO productos (id_cliente, tienda, categoria, descripcion, precio, moneda, cantidad, estado, observaciones, foto_path)
+                                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                      (id_cliente, tienda_clean, cat_clean, prod_clean, precio, "CRC", cantidad, estado, obs_clean, foto_filename))
+                            c.execute("""INSERT INTO notificaciones (id_cliente, titulo, mensaje, fecha) VALUES (?, ?, ?, ?)""",
+                                      (id_cliente, "Nuevo pedido registrado", f"Se agregó '{prod_clean}' ({tienda_clean}) a tus compras por ₡{precio:,.0f}.", datetime.now().strftime("%Y-%m-%d %H:%M")))
+                            conn.commit()
+                            st.success(f"¡Compra de '{prod_clean}' registrada exitosamente para {id_cliente}!")
 
-                        path_fac, link_wa = generar_factura_imagen(id_cliente)
-                        if path_fac and os.path.exists(path_fac):
-                            st.success("🖼️ ¡Factura digital en imagen generada con éxito!")
-                            with open(path_fac, "rb") as file:
-                                st.download_button(
-                                    label="📥 Descargar Factura en Imagen (para WhatsApp)",
-                                    data=file,
-                                    file_name=f"Factura_{id_cliente}.jpg",
-                                    mime="image/jpeg",
-                                    key="dl_factura_compra"
-                                )
-                        if link_wa:
-                            st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Mensaje por WhatsApp</a>', unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
+                            path_fac, link_wa = generar_factura_imagen(id_cliente)
+                            if path_fac and os.path.exists(path_fac):
+                                st.success("🖼️ ¡Factura digital en imagen generada con éxito!")
+                                with open(path_fac, "rb") as file:
+                                    st.download_button(
+                                        label="📥 Descargar Factura en Imagen (para WhatsApp)",
+                                        data=file,
+                                        file_name=f"Factura_{id_cliente}.jpg",
+                                        mime="image/jpeg",
+                                        key="dl_factura_compra"
+                                    )
+                            if link_wa:
+                                st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Mensaje por WhatsApp</a>', unsafe_allow_html=True)
 
         # 2. Clientes y Expedientes
         elif menu_principal == "👩 Clientes y Expedientes":
@@ -626,167 +808,163 @@ elif st.session_state.user_role == "admin":
                 unsafe_allow_html=True,
             )
 
-            st.markdown('<div class="form-card">', unsafe_allow_html=True)
-            st.markdown("<h4 style='color:#be185d;'>👤 Registrar Nuevo Cliente / Emprendedor</h4>", unsafe_allow_html=True)
+            with card():
+                st.markdown("<h4 style='color:#be185d;'>👤 Registrar Nuevo Cliente / Emprendedor</h4>", unsafe_allow_html=True)
 
-            tipo_registro = st.radio("Tipo de Registro:", ["🌸 Clienta Regular (MIN)", "💼 Emprendedor (EMP)"], horizontal=True, key="tipo_reg_cli")
+                tipo_registro = st.radio("Tipo de Registro:", ["🌸 Clienta Regular (MIN)", "💼 Emprendedor (EMP)"], horizontal=True, key="tipo_reg_cli")
 
-            c.execute("SELECT id_cliente FROM clientes")
-            rows = c.fetchall()
+                c.execute("SELECT id_cliente FROM clientes")
+                rows = c.fetchall()
 
-            if "EMP" in tipo_registro:
-                numeros = [int(str(r[0]).replace("EMP-", "").strip()) for r in rows if r[0] and str(r[0]).startswith("EMP-") and str(r[0]).replace("EMP-", "").strip().isdigit()]
-                nuevo_id = f"EMP-{max(numeros) + 1:04d}" if numeros else "EMP-0001"
-            else:
-                numeros = [int(str(r[0]).replace("MIN-", "").strip()) for r in rows if r[0] and str(r[0]).startswith("MIN-") and str(r[0]).replace("MIN-", "").strip().isdigit()]
-                nuevo_id = f"MIN-{max(numeros) + 1:04d}" if numeros else "MIN-0001"
-
-            st.markdown(f"🏷️ <span style='font-size:16px; font-weight:bold; color:#be185d;'>Código asignado: {nuevo_id}</span>", unsafe_allow_html=True)
-            st.write("")
-
-            with st.form("form_registro_cliente"):
-                nombre = st.text_input("Nombre Completo", placeholder="Ej. Maria Lopez")
-                tel = st.text_input("Teléfono / WhatsApp", placeholder="Ej. 88888888")
-                correo = st.text_input("Correo Electrónico", placeholder="Ej. correo@ejemplo.com")
-
-                nombre_caja_in, precio_caja_in = "", 0.0
                 if "EMP" in tipo_registro:
-                    st.markdown("---")
-                    st.markdown("💼 **Configuración de Caja para Emprendedor:**")
-                    nombre_caja_in = st.text_input("Identificación / Nombre de la Caja", placeholder="Ej. Caja #01 - Accesorios", value="Caja #01")
-                    precio_caja_in = st.number_input("Precio o Alquiler Mensual de Caja (₡ CRC)", min_value=0.0, value=0.0, step=1000.0)
-
-                btn_guardar_cli = st.form_submit_button("Guardar Registro")
-
-                if btn_guardar_cli:
-                    if nombre.strip():
-                        nombre_clean = nombre.strip().title()
-                        c.execute("INSERT OR REPLACE INTO clientes (id_cliente, nombre, telefono, correo) VALUES (?, ?, ?, ?)", (nuevo_id, nombre_clean, tel, correo))
-                        
-                        if "EMP" in tipo_registro:
-                            caja_clean = nombre_caja_in.strip().capitalize() if nombre_caja_in else "Caja Asignada"
-                            c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)", (nuevo_id, caja_clean, precio_caja_in))
-
-                        conn.commit()
-                        st.success(f"¡Registro de {nombre_clean} guardado exitosamente ({nuevo_id})!")
-                        st.rerun()
-                    else:
-                        st.error("Debes ingresar el nombre del cliente.")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            st.markdown('<div class="form-card">', unsafe_allow_html=True)
-            st.markdown("<h4 style='color:#be185d;'>📋 Directorio de Clientes y Emprendedores</h4>", unsafe_allow_html=True)
-            
-            clientas_todas = pd.read_sql("""
-                SELECT c.id_cliente as Código, c.nombre as Nombre, c.telefono as Teléfono, 
-                       COALESCE(e.nombre_caja, 'N/A') as 'Caja', COALESCE(e.precio_caja, 0.0) as 'Precio Caja (₡)'
-                FROM clientes c 
-                LEFT JOIN cajas_emprendedores e ON c.id_cliente = e.id_cliente 
-                ORDER BY c.id_cliente DESC""", conn)
-            
-            id_cli_exp = None
-            if not clientas_todas.empty:
-                evento_seleccion = st.dataframe(clientas_todas, hide_index=True, on_select="rerun", selection_mode="single-row", key="df_dir_clientas")
-
-                selected_rows = []
-                if isinstance(evento_seleccion, dict):
-                    selected_rows = evento_seleccion.get("selection", {}).get("rows", [])
-                elif hasattr(evento_seleccion, "selection"):
-                    sel = getattr(evento_seleccion, "selection")
-                    if isinstance(sel, dict):
-                        selected_rows = sel.get("rows", [])
-                    elif hasattr(sel, "rows"):
-                        selected_rows = getattr(sel, "rows", [])
-
-                if selected_rows:
-                    fila_idx = selected_rows[0]
-                    id_cli_exp = clientas_todas.iloc[fila_idx]["Código"]
-
-                st.divider()
-                st.markdown("<h5 style='color:#be185d;'>🔍 Expediente del Cliente Seleccionado</h5>", unsafe_allow_html=True)
-
-                if id_cli_exp:
-                    c.execute("SELECT nombre, telefono, correo FROM clientes WHERE id_cliente = ?", (id_cli_exp,))
-                    info_cli = c.fetchone()
-
-                    c.execute("SELECT nombre_caja, precio_caja FROM cajas_emprendedores WHERE id_cliente = ?", (id_cli_exp,))
-                    res_caja_exp = c.fetchone()
-                    caja_nombre_exp, caja_precio_exp = (res_caja_exp[0], res_caja_exp[1] or 0.0) if res_caja_exp else (None, 0.0)
-
-                    prods_cli = pd.read_sql("SELECT descripcion, tienda, precio, cantidad, estado, foto_path FROM productos WHERE id_cliente = ?", conn, params=(id_cli_exp,))
-                    abonos_cli = pd.read_sql("SELECT monto_crc, fecha FROM abonos WHERE id_cliente = ?", conn, params=(id_cli_exp,))
-                    
-                    tot_articulos = (prods_cli['precio'].fillna(0.0) * prods_cli['cantidad'].fillna(1)).sum() if not prods_cli.empty else 0.0
-                    tot_comp = tot_articulos + caja_precio_exp
-                    tot_ab = abonos_cli['monto_crc'].fillna(0.0).sum() if not abonos_cli.empty else 0.0
-                    saldo_p = tot_comp - tot_ab
-
-                    with st.expander(f"👤 EXPEDIENTE: {info_cli[0]} ({id_cli_exp})", expanded=True):
-                        col_m1, col_m2, col_m3 = st.columns(3)
-                        col_m1.metric("Total Cargos", f"₡{tot_comp:,.0f}")
-                        col_m2.metric("Total Abonado", f"₡{tot_ab:,.0f}")
-                        col_m3.metric("Saldo Pendiente", f"₡{max(0.0, saldo_p):,.0f}")
-
-                        if id_cli_exp.startswith("EMP-"):
-                            st.write("")
-                            st.markdown('<div style="background:#fdf2f8; padding:12px; border-radius:10px; border:1px solid #F3B2C9;">', unsafe_allow_html=True)
-                            st.markdown(f"💼 **Configuración de Caja de Emprendedor:**")
-                            col_cj1, col_cj2, col_cj3 = st.columns([2, 2, 1])
-                            with col_cj1:
-                                edit_nombre_caja = st.text_input("Nombre de Caja", value=caja_nombre_exp or "Caja #01", key=f"exp_cj_nom_{id_cli_exp}")
-                            with col_cj2:
-                                edit_precio_caja = st.number_input("Precio de Caja (₡)", value=float(caja_precio_exp), step=1000.0, key=f"exp_cj_pre_{id_cli_exp}")
-                            with col_cj3:
-                                st.write("")
-                                if st.button("💾 Actualizar Caja", key=f"btn_update_cj_{id_cli_exp}"):
-                                    c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)",
-                                              (id_cli_exp, edit_nombre_caja.strip().capitalize(), edit_precio_caja))
-                                    conn.commit()
-                                    st.success("¡Caja actualizada!")
-                                    st.rerun()
-                            st.markdown('</div>', unsafe_allow_html=True)
-
-                        st.write("")
-                        path_fac, link_wa = generar_factura_imagen(id_cli_exp)
-                        if path_fac and os.path.exists(path_fac):
-                            with open(path_fac, "rb") as file:
-                                st.download_button(
-                                    label="🖼️ Descargar Factura en Imagen (para WhatsApp)",
-                                    data=file,
-                                    file_name=f"Factura_{id_cli_exp}.jpg",
-                                    mime="image/jpeg",
-                                    key="dl_factura_exp"
-                                )
-                        if link_wa:
-                            st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Mensaje por WhatsApp</a>', unsafe_allow_html=True)
-
-                        st.divider()
-                        st.markdown("**📦 Pedidos / Artículos comprados:**")
-                        if prods_cli.empty:
-                            st.info("Sin artículos individuales registrados.")
-                        else:
-                            for _, r in prods_cli.iterrows():
-                                st.markdown('<div class="form-card" style="border: 1px solid #F3B2C9; padding: 15px; margin-bottom: 10px;">', unsafe_allow_html=True)
-                                col_img, col_info = st.columns([1, 2])
-                                with col_img:
-                                    if r["foto_path"] and os.path.exists(os.path.join("fotos_productos", r["foto_path"])):
-                                        st.image(os.path.join("fotos_productos", r["foto_path"]))
-                                    else:
-                                        st.caption("📷 Sin foto")
-                                with col_info:
-                                    st.markdown(f"✨ **{r['descripcion']}**")
-                                    st.caption(f"🛍️ Tienda: {r['tienda']} | 📌 Estado: {r['estado']}")
-                                    precio_item = r['precio'] if pd.notna(r['precio']) else 0.0
-                                    cant_item = r['cantidad'] if pd.notna(r['cantidad']) else 1
-                                    st.markdown(f"📦 Cantidad: {int(cant_item)} | 💰 **Total: ₡{(precio_item * cant_item):,.0f}**")
-                                st.markdown('</div>', unsafe_allow_html=True)
+                    numeros = [int(str(r[0]).replace("EMP-", "").strip()) for r in rows if r[0] and str(r[0]).startswith("EMP-") and str(r[0]).replace("EMP-", "").strip().isdigit()]
+                    nuevo_id = f"EMP-{max(numeros) + 1:04d}" if numeros else "EMP-0001"
                 else:
-                    st.info("👆 Haz clic en cualquier cliente de la tabla superior para cargar automáticamente su expediente.")
-            else:
-                st.info("No hay clientes registrados.")
-            st.markdown("</div>", unsafe_allow_html=True)
+                    numeros = [int(str(r[0]).replace("MIN-", "").strip()) for r in rows if r[0] and str(r[0]).startswith("MIN-") and str(r[0]).replace("MIN-", "").strip().isdigit()]
+                    nuevo_id = f"MIN-{max(numeros) + 1:04d}" if numeros else "MIN-0001"
 
-        # 3. Gestor Pedidos
+                st.markdown(f"🏷️ <span style='font-size:16px; font-weight:bold; color:#be185d;'>Código asignado: {nuevo_id}</span>", unsafe_allow_html=True)
+                st.write("")
+
+                with st.form("form_registro_cliente", clear_on_submit=True):
+                    nombre = st.text_input("Nombre Completo", placeholder="Ej. Maria Lopez")
+                    tel = st.text_input("Teléfono / WhatsApp", placeholder="Ej. 88888888")
+                    correo = st.text_input("Correo Electrónico", placeholder="Ej. correo@ejemplo.com")
+
+                    nombre_caja_in, precio_caja_in = "", 0.0
+                    if "EMP" in tipo_registro:
+                        st.markdown("---")
+                        st.markdown("💼 **Configuración de Caja para Emprendedor:**")
+                        nombre_caja_in = st.text_input("Identificación / Nombre de la Caja", placeholder="Ej. Caja #01 - Accesorios", value="Caja #01")
+                        precio_caja_in = st.number_input("Precio o Alquiler Mensual de Caja (₡ CRC)", min_value=0.0, value=0.0, step=1000.0)
+
+                    btn_guardar_cli = st.form_submit_button("Guardar Registro")
+
+                    if btn_guardar_cli:
+                        if nombre.strip():
+                            nombre_clean = nombre.strip().title()
+                            c.execute("INSERT OR REPLACE INTO clientes (id_cliente, nombre, telefono, correo) VALUES (?, ?, ?, ?)", (nuevo_id, nombre_clean, tel, correo))
+                        
+                            if "EMP" in tipo_registro:
+                                caja_clean = nombre_caja_in.strip().capitalize() if nombre_caja_in else "Caja Asignada"
+                                c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)", (nuevo_id, caja_clean, precio_caja_in))
+
+                            conn.commit()
+                            st.success(f"¡Registro de {nombre_clean} guardado exitosamente ({nuevo_id})!")
+                            st.rerun()
+                        else:
+                            st.error("Debes ingresar el nombre del cliente.")
+
+            with card():
+                st.markdown("<h4 style='color:#be185d;'>📋 Directorio de Clientes y Emprendedores</h4>", unsafe_allow_html=True)
+            
+                clientas_todas = pd.read_sql("""
+                    SELECT c.id_cliente as Código, c.nombre as Nombre, c.telefono as Teléfono, 
+                           COALESCE(e.nombre_caja, 'N/A') as 'Caja', COALESCE(e.precio_caja, 0.0) as 'Precio Caja (₡)'
+                    FROM clientes c 
+                    LEFT JOIN cajas_emprendedores e ON c.id_cliente = e.id_cliente 
+                    ORDER BY c.id_cliente DESC""", conn)
+            
+                id_cli_exp = None
+                if not clientas_todas.empty:
+                    evento_seleccion = st.dataframe(clientas_todas, hide_index=True, on_select="rerun", selection_mode="single-row", key="df_dir_clientas")
+
+                    selected_rows = []
+                    if isinstance(evento_seleccion, dict):
+                        selected_rows = evento_seleccion.get("selection", {}).get("rows", [])
+                    elif hasattr(evento_seleccion, "selection"):
+                        sel = getattr(evento_seleccion, "selection")
+                        if isinstance(sel, dict):
+                            selected_rows = sel.get("rows", [])
+                        elif hasattr(sel, "rows"):
+                            selected_rows = getattr(sel, "rows", [])
+
+                    if selected_rows:
+                        fila_idx = selected_rows[0]
+                        id_cli_exp = clientas_todas.iloc[fila_idx]["Código"]
+
+                    st.divider()
+                    st.markdown("<h5 style='color:#be185d;'>🔍 Expediente del Cliente Seleccionado</h5>", unsafe_allow_html=True)
+
+                    if id_cli_exp:
+                        c.execute("SELECT nombre, telefono, correo FROM clientes WHERE id_cliente = ?", (id_cli_exp,))
+                        info_cli = c.fetchone()
+
+                        c.execute("SELECT nombre_caja, precio_caja FROM cajas_emprendedores WHERE id_cliente = ?", (id_cli_exp,))
+                        res_caja_exp = c.fetchone()
+                        caja_nombre_exp, caja_precio_exp = (res_caja_exp[0], res_caja_exp[1] or 0.0) if res_caja_exp else (None, 0.0)
+
+                        prods_cli = pd.read_sql("SELECT descripcion, tienda, precio, cantidad, estado, foto_path FROM productos WHERE id_cliente = ?", conn, params=(id_cli_exp,))
+                        abonos_cli = pd.read_sql("SELECT monto_crc, fecha FROM abonos WHERE id_cliente = ?", conn, params=(id_cli_exp,))
+                    
+                        tot_articulos = (prods_cli['precio'].fillna(0.0) * prods_cli['cantidad'].fillna(1)).sum() if not prods_cli.empty else 0.0
+                        tot_comp = tot_articulos + caja_precio_exp
+                        tot_ab = abonos_cli['monto_crc'].fillna(0.0).sum() if not abonos_cli.empty else 0.0
+                        saldo_p = tot_comp - tot_ab
+
+                        with st.expander(f"👤 EXPEDIENTE: {info_cli[0]} ({id_cli_exp})", expanded=True):
+                            col_m1, col_m2, col_m3 = st.columns(3)
+                            col_m1.metric("Total Cargos", f"₡{tot_comp:,.0f}")
+                            col_m2.metric("Total Abonado", f"₡{tot_ab:,.0f}")
+                            col_m3.metric("Saldo Pendiente", f"₡{max(0.0, saldo_p):,.0f}")
+
+                            if id_cli_exp.startswith("EMP-"):
+                                st.write("")
+                                with card("sub"):
+                                    st.markdown(f"💼 **Configuración de Caja de Emprendedor:**")
+                                    col_cj1, col_cj2, col_cj3 = st.columns([2, 2, 1])
+                                    with col_cj1:
+                                        edit_nombre_caja = st.text_input("Nombre de Caja", value=caja_nombre_exp or "Caja #01", key=f"exp_cj_nom_{id_cli_exp}")
+                                    with col_cj2:
+                                        edit_precio_caja = st.number_input("Precio de Caja (₡)", value=float(caja_precio_exp), step=1000.0, key=f"exp_cj_pre_{id_cli_exp}")
+                                    with col_cj3:
+                                        st.write("")
+                                        if st.button("💾 Actualizar Caja", key=f"btn_update_cj_{id_cli_exp}"):
+                                            c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)",
+                                                      (id_cli_exp, edit_nombre_caja.strip().capitalize(), edit_precio_caja))
+                                            conn.commit()
+                                            st.success("¡Caja actualizada!")
+                                            st.rerun()
+
+                            st.write("")
+                            path_fac, link_wa = generar_factura_imagen(id_cli_exp)
+                            if path_fac and os.path.exists(path_fac):
+                                with open(path_fac, "rb") as file:
+                                    st.download_button(
+                                        label="🖼️ Descargar Factura en Imagen (para WhatsApp)",
+                                        data=file,
+                                        file_name=f"Factura_{id_cli_exp}.jpg",
+                                        mime="image/jpeg",
+                                        key="dl_factura_exp"
+                                    )
+                            if link_wa:
+                                st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Mensaje por WhatsApp</a>', unsafe_allow_html=True)
+
+                            st.divider()
+                            st.markdown("**📦 Pedidos / Artículos comprados:**")
+                            if prods_cli.empty:
+                                st.info("Sin artículos individuales registrados.")
+                            else:
+                                for _, r in prods_cli.iterrows():
+                                    with card("sub"):
+                                        col_img, col_info = st.columns([1, 2])
+                                        with col_img:
+                                            if r["foto_path"] and os.path.exists(os.path.join("fotos_productos", r["foto_path"])):
+                                                st.image(os.path.join("fotos_productos", r["foto_path"]))
+                                            else:
+                                                st.caption("📷 Sin foto")
+                                        with col_info:
+                                            st.markdown(f"✨ **{r['descripcion']}**")
+                                            st.caption(f"🛍️ Tienda: {r['tienda']} | 📌 Estado: {r['estado']}")
+                                            precio_item = r['precio'] if pd.notna(r['precio']) else 0.0
+                                            cant_item = r['cantidad'] if pd.notna(r['cantidad']) else 1
+                                            st.markdown(f"📦 Cantidad: {int(cant_item)} | 💰 **Total: ₡{(precio_item * cant_item):,.0f}**")
+                    else:
+                        st.info("👆 Haz clic en cualquier cliente de la tabla superior para cargar automáticamente su expediente.")
+                else:
+                    st.info("No hay clientes registrados.")
+
+        # 3. Gestor de pedidos: al elegir un pedido (en la tabla o en la lista) sus datos se cargan solos
         elif menu_principal == "✏️ Gestor Pedidos":
             st.markdown(
                 """
@@ -797,55 +975,126 @@ elif st.session_state.user_role == "admin":
                 unsafe_allow_html=True,
             )
 
-            st.markdown('<div class="form-card">', unsafe_allow_html=True)
+            mensaje_flash = st.session_state.pop("gestor_msg", None)
+            if mensaje_flash:
+                st.success(mensaje_flash)
+
             cli_pedidos = pd.read_sql("SELECT DISTINCT p.id_cliente, c.nombre FROM productos p JOIN clientes c ON p.id_cliente = c.id_cliente WHERE p.id_cliente IS NOT NULL AND p.id_cliente != ''", conn)
 
-            if cli_pedidos.empty:
-                st.info("No hay encargos asignados a clientes específicos.")
-            else:
-                dict_cli_p = {f"{r['id_cliente']} — {r['nombre']}": r['id_cliente'] for _, r in cli_pedidos.iterrows()}
-                cli_p_sel = st.selectbox("Selecciona el cliente:", list(dict_cli_p.keys()), key="gestor_cli_sel")
-                id_cli_gest = dict_cli_p[cli_p_sel]
+            with card():
+                if cli_pedidos.empty:
+                    st.info("No hay encargos asignados a clientes específicos.")
+                else:
+                    dict_cli_p = {f"{r['id_cliente']} — {r['nombre']}": r['id_cliente'] for _, r in cli_pedidos.iterrows()}
+                    if st.session_state.get("gestor_cli_sel") not in dict_cli_p:
+                        st.session_state.pop("gestor_cli_sel", None)
+                    cli_p_sel = st.selectbox("Cliente", list(dict_cli_p.keys()), key="gestor_cli_sel")
+                    id_cli_gest = dict_cli_p[cli_p_sel]
 
-                prods_de_cli = pd.read_sql("SELECT id, tienda, descripcion, precio, cantidad, estado FROM productos WHERE id_cliente = ? ORDER BY id DESC", conn, params=(id_cli_gest,))
-                st.dataframe(prods_de_cli, use_container_width=True)
+                    prods_de_cli = pd.read_sql(
+                        "SELECT id, tienda, categoria, descripcion, precio, cantidad, estado, foto_path FROM productos WHERE id_cliente = ? ORDER BY id DESC",
+                        conn, params=(id_cli_gest,))
 
-                prod_options = {f"Pedido #{r['id']} - {r['descripcion']} (₡{(r['precio'] or 0.0):,.0f})": r['id'] for _, r in prods_de_cli.iterrows()}
-                selected_prod_label = st.selectbox("Seleccionar encargo a modificar:", list(prod_options.keys()), key="gestor_prod_sel")
-                selected_id = prod_options[selected_prod_label]
+                    if prods_de_cli.empty:
+                        st.warning("Este cliente no tiene pedidos registrados.")
+                    else:
+                        ids_pedidos = [int(i) for i in prods_de_cli["id"]]
+                        etiquetas = {
+                            int(r["id"]): f"Pedido #{int(r['id'])} - {r['descripcion']} (₡{(r['precio'] if pd.notna(r['precio']) else 0.0):,.0f})"
+                            for _, r in prods_de_cli.iterrows()
+                        }
 
-                c.execute("SELECT tienda, categoria, descripcion, precio, cantidad, estado FROM productos WHERE id = ?", (selected_id,))
-                p_data = c.fetchone()
+                        # --- Tabla: al tocar una fila se selecciona ese pedido ---
+                        st.caption("Toca una fila de la tabla (o usa la lista de abajo) para cargar el pedido en el formulario.")
+                        tabla_pedidos = prods_de_cli[["id", "tienda", "descripcion", "cantidad", "precio", "estado"]].rename(
+                            columns={"id": "N.º", "tienda": "Tienda", "descripcion": "Producto", "cantidad": "Cant.", "precio": "Precio (₡)", "estado": "Estado"})
+                        evento_ped = st.dataframe(
+                            tabla_pedidos, hide_index=True, on_select="rerun", selection_mode="single-row",
+                            key=f"gestor_tabla_{id_cli_gest}", use_container_width=True)
 
-                if p_data:
-                    estados_opciones = ["🇺🇸 Comprado en USA", "📦 En tránsito", "🇨🇷 Recibido en CR", "✅ Entregado"]
-                    idx_estado = estados_opciones.index(p_data[5]) if p_data[5] in estados_opciones else 0
+                        filas_sel = []
+                        sel_obj = getattr(evento_ped, "selection", None)
+                        if sel_obj is None and isinstance(evento_ped, dict):
+                            sel_obj = evento_ped.get("selection")
+                        if isinstance(sel_obj, dict):
+                            filas_sel = sel_obj.get("rows", [])
+                        elif sel_obj is not None:
+                            filas_sel = getattr(sel_obj, "rows", [])
 
-                    col_e1, col_e2 = st.columns(2)
-                    with col_e1:
-                        edit_tienda = st.text_input("Tienda", value=p_data[0] or "", key="ped_edit_tienda")
-                        edit_desc = st.text_input("Descripción", value=p_data[2] or "", key="ped_edit_desc")
-                        edit_precio = st.number_input("Precio (₡)", value=float(p_data[3]) if p_data[3] is not None else 0.0, step=500.0, key="ped_edit_precio")
-                    with col_e2:
-                        edit_cat = st.text_input("Categoría", value=p_data[1] if p_data[1] else "", key="ped_edit_cat")
-                        edit_cant = st.number_input("Cantidad", value=int(p_data[4]) if p_data[4] is not None else 1, step=1, key="ped_edit_cant")
-                        edit_est = st.selectbox("Estado", estados_opciones, index=idx_estado, key="ped_edit_est")
+                        if filas_sel and filas_sel[0] < len(ids_pedidos):
+                            marca_fila = (id_cli_gest, ids_pedidos[filas_sel[0]])
+                            if st.session_state.get("gestor_ultima_fila") != marca_fila:
+                                st.session_state.gestor_ultima_fila = marca_fila
+                                st.session_state.gestor_pedido_id = ids_pedidos[filas_sel[0]]
+                        else:
+                            st.session_state.pop("gestor_ultima_fila", None)
 
-                    col_b1, col_b2 = st.columns(2)
-                    with col_b1:
-                        if st.button("💾 Guardar Cambios", key="btn_ped_save"):
-                            c.execute("UPDATE productos SET tienda=?, categoria=?, descripcion=?, precio=?, cantidad=?, estado=? WHERE id=?", 
-                                      (edit_tienda.strip().capitalize(), edit_cat.strip().capitalize(), edit_desc.strip().capitalize(), edit_precio, edit_cant, edit_est, selected_id))
-                            conn.commit()
-                            st.success("¡Pedido actualizado correctamente!")
-                            st.rerun()
-                    with col_b2:
-                        if st.button("🗑 Eliminar Pedido", key="btn_ped_del"):
-                            c.execute("DELETE FROM productos WHERE id=?", (selected_id,))
-                            conn.commit()
-                            st.warning("Pedido eliminado.")
-                            st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
+                        # --- Lista desplegable (sincronizada con la tabla) ---
+                        if st.session_state.get("gestor_pedido_id") not in ids_pedidos:
+                            st.session_state.gestor_pedido_id = ids_pedidos[0]
+
+                        id_pedido_actual = st.selectbox(
+                            "Pedido a modificar",
+                            ids_pedidos,
+                            format_func=lambda i: etiquetas.get(i, f"Pedido #{i}"),
+                            key="gestor_pedido_id",
+                        )
+
+                        # --- Carga automática de los datos del pedido en el formulario ---
+                        fila_actual = prods_de_cli[prods_de_cli["id"] == id_pedido_actual].iloc[0]
+                        if st.session_state.get("gestor_cargado_id") != id_pedido_actual:
+                            st.session_state.edit_tienda = fila_actual["tienda"] if pd.notna(fila_actual["tienda"]) else ""
+                            st.session_state.edit_categoria = fila_actual["categoria"] if pd.notna(fila_actual["categoria"]) else ""
+                            st.session_state.edit_desc = fila_actual["descripcion"] if pd.notna(fila_actual["descripcion"]) else ""
+                            st.session_state.edit_cant = int(fila_actual["cantidad"]) if pd.notna(fila_actual["cantidad"]) else 1
+                            st.session_state.edit_precio = float(fila_actual["precio"]) if pd.notna(fila_actual["precio"]) else 0.0
+                            st.session_state.edit_estado = fila_actual["estado"] if pd.notna(fila_actual["estado"]) and fila_actual["estado"] else "Pendiente"
+                            st.session_state.gestor_cargado_id = id_pedido_actual
+
+                        st.divider()
+                        st.markdown(f"<h5 style='color:#be185d;'>Editando el pedido #{id_pedido_actual}</h5>", unsafe_allow_html=True)
+
+                        foto_pedido = fila_actual["foto_path"]
+                        if isinstance(foto_pedido, str) and foto_pedido and os.path.exists(os.path.join("fotos_productos", foto_pedido)):
+                            st.image(os.path.join("fotos_productos", foto_pedido), width=150)
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            nueva_tienda = st.text_input("Tienda", key="edit_tienda")
+                            nueva_descripcion = st.text_input("Descripción", key="edit_desc")
+                            nuevo_precio = st.number_input("Precio (₡)", step=100.0, key="edit_precio")
+
+                        with col2:
+                            nueva_categoria = st.text_input("Categoría", key="edit_categoria")
+                            nueva_cantidad = st.number_input("Cantidad", step=1, key="edit_cant")
+
+                            opciones_estado = ["Pendiente", "🇺🇸 Comprado en USA", "📦 En tránsito", "🇨🇷 Recibido en CR", "✅ Entregado"]
+                            if st.session_state.edit_estado not in opciones_estado:
+                                opciones_estado.insert(0, st.session_state.edit_estado)
+                            nuevo_estado = st.selectbox("Estado", options=opciones_estado, key="edit_estado")
+
+                        st.markdown(f"**Total del pedido:** ₡{(nuevo_precio * nueva_cantidad):,.0f}")
+
+                        col_btn1, col_btn2 = st.columns(2)
+                        with col_btn1:
+                            if st.button("💾 Guardar cambios", key="btn_guardar_cambios_pedido"):
+                                c.execute("""
+                                    UPDATE productos
+                                    SET tienda = ?, categoria = ?, descripcion = ?, cantidad = ?, precio = ?, estado = ?
+                                    WHERE id = ?
+                                """, (nueva_tienda.strip().capitalize(), nueva_categoria.strip().capitalize(), nueva_descripcion.strip().capitalize(), nueva_cantidad, nuevo_precio, nuevo_estado, id_pedido_actual))
+                                conn.commit()
+                                st.session_state.gestor_msg = f"¡Pedido #{id_pedido_actual} actualizado exitosamente!"
+                                st.session_state.gestor_cargado_id = None
+                                st.rerun()
+                        with col_btn2:
+                            if st.button("🗑 Eliminar Pedido", key="btn_eliminar_pedido"):
+                                c.execute("DELETE FROM productos WHERE id=?", (id_pedido_actual,))
+                                conn.commit()
+                                st.session_state.gestor_msg = f"Pedido #{id_pedido_actual} eliminado."
+                                st.session_state.gestor_cargado_id = None
+                                st.rerun()
 
         # 4. Registrar Abonos
         elif menu_principal == "💰 Registrar Abonos":
@@ -858,42 +1107,41 @@ elif st.session_state.user_role == "admin":
                 unsafe_allow_html=True,
             )
 
-            st.markdown('<div class="form-card">', unsafe_allow_html=True)
-            cli_list = pd.read_sql("SELECT id_cliente || ' - ' || nombre AS disp, id_cliente FROM clientes", conn)
-            if cli_list.empty:
-                st.warning("No hay clientes registrados.")
-            else:
-                sel = st.selectbox("Seleccionar Cliente para Abonar", cli_list["disp"], key="abono_sel")
-                id_c = sel.split(" - ")[0]
-                monto = st.number_input("Monto Abonado (₡ CRC)", min_value=0.0, step=1000.0, key="abono_monto_num")
-                st.write("")
-                if st.button("Guardar Abono", key="btn_save_abono"):
-                    c.execute("INSERT INTO abonos (id_cliente, monto_crc, fecha) VALUES (?, ?, ?)", (id_c, monto, datetime.now().strftime("%Y-%m-%d %H:%M")))
-                    conn.commit()
-                    st.success("Abono registrado con éxito.")
+            with card():
+                cli_list = pd.read_sql("SELECT id_cliente || ' - ' || nombre AS disp, id_cliente FROM clientes", conn)
+                if cli_list.empty:
+                    st.warning("No hay clientes registrados.")
+                else:
+                    sel = st.selectbox("Seleccionar Cliente para Abonar", cli_list["disp"], key="abono_sel")
+                    id_c = sel.split(" - ")[0]
+                
+                    monto = st.number_input("Monto Abonado (₡ CRC)", min_value=0.0, step=1000.0, key="abono_monto_num")
+                    st.write("")
+                    if st.button("Guardar Abono", key="btn_save_abono"):
+                        c.execute("INSERT INTO abonos (id_cliente, monto_crc, fecha) VALUES (?, ?, ?)", (id_c, monto, datetime.now().strftime("%Y-%m-%d %H:%M")))
+                        conn.commit()
+                        st.success("Abono registrado con éxito.")
                     
-                    path_fac, link_wa = generar_factura_imagen(id_c)
-                    if path_fac and os.path.exists(path_fac):
-                        with open(path_fac, "rb") as file:
-                            st.download_button(
-                                label="🖼️ Descargar Factura Actualizada en Imagen",
-                                data=file,
-                                file_name=f"Factura_{id_c}.jpg",
-                                mime="image/jpeg",
-                                key="dl_factura_abono"
-                            )
-                    if link_wa:
-                        st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Mensaje por WhatsApp</a>', unsafe_allow_html=True)
-            st.markdown("</div>", unsafe_allow_html=True)
+                        path_fac, link_wa = generar_factura_imagen(id_c)
+                        if path_fac and os.path.exists(path_fac):
+                            with open(path_fac, "rb") as file:
+                                st.download_button(
+                                    label="🖼️ Descargar Factura Actualizada en Imagen",
+                                    data=file,
+                                    file_name=f"Factura_{id_c}.jpg",
+                                    mime="image/jpeg",
+                                    key="dl_factura_abono"
+                                )
+                        if link_wa:
+                            st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Mensaje por WhatsApp</a>', unsafe_allow_html=True)
 
-            st.markdown('<div class="form-card">', unsafe_allow_html=True)
-            st.markdown("<h4 style='color:#be185d;'>📋 Historial de Abonos Recibidos</h4>", unsafe_allow_html=True)
-            abonos_detalle = pd.read_sql("SELECT a.fecha as Fecha, c.id_cliente as Código, c.nombre as Cliente, a.monto_crc as 'Monto Abonado (₡)' FROM abonos a JOIN clientes c ON a.id_cliente = c.id_cliente ORDER BY a.id DESC", conn)
-            if not abonos_detalle.empty:
-                st.dataframe(abonos_detalle, use_container_width=True)
-            else:
-                st.info("No hay abonos registrados en el sistema.")
-            st.markdown("</div>", unsafe_allow_html=True)
+            with card():
+                st.markdown("<h4 style='color:#be185d;'>📋 Historial de Abonos Recibidos</h4>", unsafe_allow_html=True)
+                abonos_detalle = pd.read_sql("SELECT a.fecha as Fecha, c.id_cliente as Código, c.nombre as Cliente, a.monto_crc as 'Monto Abonado (₡)' FROM abonos a JOIN clientes c ON a.id_cliente = c.id_cliente ORDER BY a.id DESC", conn)
+                if not abonos_detalle.empty:
+                    st.dataframe(abonos_detalle, use_container_width=True)
+                else:
+                    st.info("No hay abonos registrados en el sistema.")
 
         # 5. Gastos Operativos
         elif menu_principal == "💸 Gastos Operativos":
@@ -906,22 +1154,25 @@ elif st.session_state.user_role == "admin":
                 unsafe_allow_html=True,
             )
 
-            st.markdown('<div class="form-card">', unsafe_allow_html=True)
-            cat_gasto = st.selectbox("Categoría del Gasto", ["🏨 Hospedaje / Hotel", "🍽️ Comida / Alimentación", "🚗 Transporte / Combustible", "✈️ Fletes / Envíos USA-CR", "🛃 Aduana / Impuestos", "📦 Material de Empaque", "💡 Servicios y Operación", "🧩 Otros Gastos"], key="gasto_cat_sel")
-            concepto = st.text_input("Concepto o Descripción", placeholder="Ej. Noche en hotel Miami...", key="gasto_conc_txt")
-            monto_gasto = st.number_input("Monto en Colones (₡ CRC)", min_value=0.0, step=500.0, key="gasto_monto_num")
-            obs_gasto = st.text_area("Notas / Observaciones adicionales", height=60, placeholder="Ej. Factura #1024", key="gasto_obs_txt")
+            with card():
+            
+                with st.form("form_registro_gastos", clear_on_submit=True):
+                    cat_gasto = st.selectbox("Categoría del Gasto", ["🏨 Hospedaje / Hotel", "🍽️ Comida / Alimentación", "🚗 Transporte / Combustible", "✈️ Fletes / Envíos USA-CR", "🛃 Aduana / Impuestos", "📦 Material de Empaque", "💡 Servicios y Operación", "🧩 Otros Gastos"], key="gasto_cat_sel")
+                    concepto = st.text_input("Concepto o Descripción", placeholder="Ej. Noche en hotel Miami...", key="gasto_conc_txt")
+                    monto_gasto = st.number_input("Monto en Colones (₡ CRC)", min_value=0.0, step=500.0, key="gasto_monto_num")
+                    obs_gasto = st.text_area("Notas / Observaciones adicionales", height=60, placeholder="Ej. Factura #1024", key="gasto_obs_txt")
 
-            st.write("")
-            if st.button("💾 Registrar Gasto Operativo", key="btn_save_gasto"):
-                if concepto and monto_gasto > 0:
-                    c.execute("INSERT INTO gastos (concepto, categoria, monto_crc, fecha, observaciones) VALUES (?, ?, ?, ?, ?)",
-                              (concepto.strip().capitalize(), cat_gasto, monto_gasto, datetime.now().strftime("%Y-%m-%d"), obs_gasto.strip().capitalize() if obs_gasto else ""))
-                    conn.commit()
-                    st.success("¡Gasto registrado e integrado correctamente!")
-                else:
-                    st.error("Por favor completa la descripción y un monto superior a 0.")
-            st.markdown("</div>", unsafe_allow_html=True)
+                    st.write("")
+                    btn_save_gasto = st.form_submit_button("💾 Registrar Gasto Operativo")
+
+                    if btn_save_gasto:
+                        if concepto and monto_gasto > 0:
+                            c.execute("INSERT INTO gastos (concepto, categoria, monto_crc, fecha, observaciones) VALUES (?, ?, ?, ?, ?)",
+                                      (concepto.strip().capitalize(), cat_gasto, monto_gasto, datetime.now().strftime("%Y-%m-%d"), obs_gasto.strip().capitalize() if obs_gasto else ""))
+                            conn.commit()
+                            st.success("¡Gasto registrado e integrado correctamente!")
+                        else:
+                            st.error("Por favor completa la descripción y un monto superior a 0.")
 
             st.markdown("<h4 style='color:#be185d;'>Últimos Gastos Registrados</h4>", unsafe_allow_html=True)
             gastos_df = pd.read_sql("SELECT fecha as Fecha, concepto as Concepto, categoria as Categoria, monto_crc as 'Monto (CRC)', observaciones as Observaciones FROM gastos ORDER BY id DESC LIMIT 10", conn)
@@ -961,67 +1212,66 @@ elif st.session_state.user_role == "admin":
             col_f5.metric("💎 GANANCIA REAL NETA", f"₡{ganancia_real:,.0f}")
 
             st.write("")
-            st.markdown('<div class="form-card">', unsafe_allow_html=True)
-            st.markdown("<h4 style='color:#be185d;'>📥 Exportar Reporte Financiero Completo</h4>", unsafe_allow_html=True)
+            with card():
+                st.markdown("<h4 style='color:#be185d;'>📥 Exportar Reporte Financiero Completo</h4>", unsafe_allow_html=True)
 
-            output = io.BytesIO()
-            wb = openpyxl.Workbook()
-            wb.remove(wb.active)
+                output = io.BytesIO()
+                wb = openpyxl.Workbook()
+                wb.remove(wb.active)
 
-            header_fill = PatternFill(start_color="F3B2C9", end_color="F3B2C9", fill_type="solid")
-            header_font = Font(name="Segoe UI", size=11, bold=True, color="0f172a")
-            data_font = Font(name="Segoe UI", size=10)
-            title_font = Font(name="Segoe UI", size=14, bold=True, color="BE185D")
-            thin_border = Border(left=Side(style='thin', color='FBCFE8'), right=Side(style='thin', color='FBCFE8'), top=Side(style='thin', color='FBCFE8'), bottom=Side(style='thin', color='FBCFE8'))
+                header_fill = PatternFill(start_color="F3B2C9", end_color="F3B2C9", fill_type="solid")
+                header_font = Font(name="Segoe UI", size=11, bold=True, color="0f172a")
+                data_font = Font(name="Segoe UI", size=10)
+                title_font = Font(name="Segoe UI", size=14, bold=True, color="BE185D")
+                thin_border = Border(left=Side(style='thin', color='FBCFE8'), right=Side(style='thin', color='FBCFE8'), top=Side(style='thin', color='FBCFE8'), bottom=Side(style='thin', color='FBCFE8'))
 
-            tablas_config = [
-                ("Resumen_Financiero", pd.DataFrame([
-                    {"Concepto": "Total Ventas Proyectadas (CRC)", "Monto CRC": total_ventas},
-                    {"Concepto": "Ingresos Reales Cobrados", "Monto CRC": total_ingresos_reales},
-                    {"Concepto": "Cuentas Por Cobrar", "Monto CRC": max(0, cuentas_por_cobrar)},
-                    {"Concepto": "Total Gastos Operativos (Egresos)", "Monto CRC": total_gastos},
-                    {"Concepto": "GANANCIA REAL / UTILIDAD NETA", "Monto CRC": ganancia_real}
-                ])),
-                ("Clientes_y_Emprendedores", pd.read_sql("SELECT c.id_cliente as Código, c.nombre as Nombre, c.telefono as Teléfono, c.correo as Correo, COALESCE(e.nombre_caja, 'N/A') as Caja, COALESCE(e.precio_caja, 0.0) as Precio_Caja_CRC FROM clientes c LEFT JOIN cajas_emprendedores e ON c.id_cliente = e.id_cliente", conn)),
-                ("Ventas_Productos", pd.read_sql("SELECT p.id_cliente as Cliente, p.tienda as Tienda, p.categoria as Categoría, p.descripcion as Producto, p.precio as Precio_CRC, p.cantidad as Cantidad, (p.precio * p.cantidad) as Total_CRC, p.estado as Estado FROM productos p WHERE p.id_cliente IS NOT NULL AND p.id_cliente != ''", conn)),
-                ("Ventas_Rapidas_POS", pd.read_sql("SELECT fecha as Fecha, producto as Producto, tipo as Tipo, cantidad as Cantidad, precio_u as Precio_Unitario, descuento as Descuento, total as Total_CRC FROM ventas_rapidas", conn)),
-                ("Ingresos_Abonos", pd.read_sql("SELECT id_cliente as Cliente, monto_crc as Monto_CRC, fecha as Fecha FROM abonos", conn)),
-                ("Gastos_Operativos", pd.read_sql("SELECT fecha as Fecha, categoria as Categoría, concepto as Concepto, monto_crc as Monto_CRC, observaciones as Observaciones FROM gastos", conn))
-            ]
+                tablas_config = [
+                    ("Resumen_Financiero", pd.DataFrame([
+                        {"Concepto": "Total Ventas Proyectadas (CRC)", "Monto CRC": total_ventas},
+                        {"Concepto": "Ingresos Reales Cobrados", "Monto CRC": total_ingresos_reales},
+                        {"Concepto": "Cuentas Por Cobrar", "Monto CRC": max(0, cuentas_por_cobrar)},
+                        {"Concepto": "Total Gastos Operativos (Egresos)", "Monto CRC": total_gastos},
+                        {"Concepto": "GANANCIA REAL / UTILIDAD NETA", "Monto CRC": ganancia_real}
+                    ])),
+                    ("Clientes_y_Emprendedores", pd.read_sql("SELECT c.id_cliente as Código, c.nombre as Nombre, c.telefono as Teléfono, c.correo as Correo, COALESCE(e.nombre_caja, 'N/A') as Caja, COALESCE(e.precio_caja, 0.0) as Precio_Caja_CRC FROM clientes c LEFT JOIN cajas_emprendedores e ON c.id_cliente = e.id_cliente", conn)),
+                    ("Ventas_Productos", pd.read_sql("SELECT p.id_cliente as Cliente, p.tienda as Tienda, p.categoria as Categoría, p.descripcion as Producto, p.precio as Precio_CRC, p.cantidad as Cantidad, (p.precio * p.cantidad) as Total_CRC, p.estado as Estado FROM productos p WHERE p.id_cliente IS NOT NULL AND p.id_cliente != ''", conn)),
+                    ("Ventas_Rapidas_POS", pd.read_sql("SELECT fecha as Fecha, producto as Producto, tipo as Tipo, cantidad as Cantidad, precio_u as Precio_Unitario, descuento as Descuento, total as Total_CRC FROM ventas_rapidas", conn)),
+                    ("Ingresos_Abonos", pd.read_sql("SELECT id_cliente as Cliente, monto_crc as Monto_CRC, fecha as Fecha FROM abonos", conn)),
+                    ("Gastos_Operativos", pd.read_sql("SELECT fecha as Fecha, categoria as Categoría, concepto as Concepto, monto_crc as Monto_CRC, observaciones as Observaciones FROM gastos", conn))
+                ]
 
-            for sheet_name, df_data in tablas_config:
-                ws = wb.create_sheet(title=sheet_name)
-                ws.views.sheetView[0].showGridLines = True
-                ws.cell(row=1, column=1, value=f"Reporte: {sheet_name.replace('_', ' ')}").font = title_font
-                if not df_data.empty:
-                    headers = list(df_data.columns)
-                    for col_idx, header in enumerate(headers, 1):
-                        cell = ws.cell(row=3, column=col_idx, value=header)
-                        cell.fill = header_fill
-                        cell.font = header_font
-                        cell.alignment = Alignment(horizontal="center", vertical="center")
-                        cell.border = thin_border
-                    for row_idx, row_data in enumerate(df_data.values, 4):
-                        for col_idx, value in enumerate(row_data, 1):
-                            cell = ws.cell(row=row_idx, column=col_idx, value=value)
-                            cell.font = data_font
+                for sheet_name, df_data in tablas_config:
+                    ws = wb.create_sheet(title=sheet_name)
+                    ws.views.sheetView[0].showGridLines = True
+                    ws.cell(row=1, column=1, value=f"Reporte: {sheet_name.replace('_', ' ')}").font = title_font
+                    if not df_data.empty:
+                        headers = list(df_data.columns)
+                        for col_idx, header in enumerate(headers, 1):
+                            cell = ws.cell(row=3, column=col_idx, value=header)
+                            cell.fill = header_fill
+                            cell.font = header_font
+                            cell.alignment = Alignment(horizontal="center", vertical="center")
                             cell.border = thin_border
-                            if "CRC" in headers[col_idx-1] or "Monto" in headers[col_idx-1] or "Precio" in headers[col_idx-1] or "Total" in headers[col_idx-1]:
-                                cell.number_format = '₡#,##0'
-                                cell.alignment = Alignment(horizontal="right")
-                    for col in ws.columns:
-                        max_len = max([len(str(cell.value or '')) for cell in col])
-                        col_letter = get_column_letter(col[0].column)
-                        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+                        for row_idx, row_data in enumerate(df_data.values, 4):
+                            for col_idx, value in enumerate(row_data, 1):
+                                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                                cell.font = data_font
+                                cell.border = thin_border
+                                if "CRC" in headers[col_idx-1] or "Monto" in headers[col_idx-1] or "Precio" in headers[col_idx-1] or "Total" in headers[col_idx-1]:
+                                    cell.number_format = '₡#,##0'
+                                    cell.alignment = Alignment(horizontal="right")
+                        for col in ws.columns:
+                            max_len = max([len(str(cell.value or '')) for cell in col])
+                            col_letter = get_column_letter(col[0].column)
+                            ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
 
-            wb.save(output)
-            st.download_button(
-                label="📊 Descargar Reporte (.xlsx)",
-                data=output.getvalue(),
-                file_name=f"Reporte_Financiero_Minici_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
+                wb.save(output)
+                st.download_button(
+                    label="📊 Descargar Reporte (.xlsx)",
+                    data=output.getvalue(),
+                    file_name=f"Reporte_Financiero_Minici_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
     # =========================================================
     # SECCIÓN 2: MÓDULO POSTVENTA & POS
@@ -1047,75 +1297,74 @@ elif st.session_state.user_role == "admin":
                 unsafe_allow_html=True,
             )
 
-            st.markdown('<div class="form-card">', unsafe_allow_html=True)
-            tipo_origen = st.radio("Tipo de Venta:", ["Del Stock General", "Producto Express (No Registrado)"], horizontal=True, key="pos_origen")
+            with card():
+                tipo_origen = st.radio("Tipo de Venta:", ["Del Stock General", "Producto Express (No Registrado)"], horizontal=True, key="pos_origen")
 
-            nombre_prod_vr, precio_u_vr, stock_max_vr, id_prod_inv = "", 0.0, 999, None
-            df_prods_disponibles = pd.read_sql("SELECT id, descripcion, precio, cantidad FROM productos WHERE (id_cliente IS NULL OR id_cliente = '') AND cantidad > 0", conn)
+                nombre_prod_vr, precio_u_vr, stock_max_vr, id_prod_inv = "", 0.0, 999, None
+                df_prods_disponibles = pd.read_sql("SELECT id, descripcion, precio, cantidad FROM productos WHERE (id_cliente IS NULL OR id_cliente = '') AND cantidad > 0", conn)
 
-            if tipo_origen == "Del Stock General":
-                if not df_prods_disponibles.empty:
-                    dict_prods = {f"{r['descripcion']} - ₡{(r['precio'] or 0.0):,.0f} (Stock: {r['cantidad']})": r for _, r in df_prods_disponibles.iterrows()}
-                    prod_sel_key = st.selectbox("Seleccionar producto del stock:", list(dict_prods.keys()), key="pos_stock_sel")
-                    p_data = dict_prods[prod_sel_key]
-                    id_prod_inv, nombre_prod_vr, precio_u_vr, stock_max_vr = int(p_data["id"]), p_data["descripcion"], float(p_data["precio"] or 0.0), int(p_data["cantidad"] or 1)
-                    cant_vr = st.number_input("Cantidad:", min_value=1, max_value=max(1, stock_max_vr), value=1, key="pos_cant_num")
+                if tipo_origen == "Del Stock General":
+                    if not df_prods_disponibles.empty:
+                        dict_prods = {f"{r['descripcion']} - ₡{(r['precio'] or 0.0):,.0f} (Stock: {r['cantidad']})": r for _, r in df_prods_disponibles.iterrows()}
+                        prod_sel_key = st.selectbox("Seleccionar producto del stock:", list(dict_prods.keys()), key="pos_stock_sel")
+                        p_data = dict_prods[prod_sel_key]
+                        id_prod_inv, nombre_prod_vr, precio_u_vr, stock_max_vr = int(p_data["id"]), p_data["descripcion"], float(p_data["precio"] or 0.0), int(p_data["cantidad"] or 1)
+                        cant_vr = st.number_input("Cantidad:", min_value=1, max_value=max(1, stock_max_vr), value=1, key="pos_cant_num")
+                    else:
+                        st.warning("⚠️ No hay productos registrados en el Stock General actualmente.")
+                        cant_vr = 0
                 else:
-                    st.warning("⚠️ No hay productos registrados en el Stock General actualmente.")
-                    cant_vr = 0
-            else:
-                nombre_prod_vr = st.text_input("Descripción del producto:", value="Venta Express", key="pos_expr_desc")
-                precio_u_vr = st.number_input("Precio unitario (₡):", min_value=0.0, value=1000.0, step=500.0, key="pos_expr_precio")
-                cant_vr = st.number_input("Cantidad:", min_value=1, value=1, key="pos_expr_cant")
+                    nombre_prod_vr = st.text_input("Descripción del producto:", value="Venta Express", key="pos_expr_desc")
+                    precio_u_vr = st.number_input("Precio unitario (₡):", min_value=0.0, value=1000.0, step=500.0, key="pos_expr_precio")
+                    cant_vr = st.number_input("Cantidad:", min_value=1, value=1, key="pos_expr_cant")
 
-            c_d1, c_d2 = st.columns(2)
-            with c_d1:
-                tipo_desc = st.selectbox("Tipo de Descuento:", ["Sin Descuento", "Porcentaje (%)", "Monto Fijo (₡)"], key="pos_tipo_desc")
-            with c_d2:
-                val_desc = st.number_input("Valor del Descuento:", min_value=0.0, value=0.0, key="pos_val_desc")
+                c_d1, c_d2 = st.columns(2)
+                with c_d1:
+                    tipo_desc = st.selectbox("Tipo de Descuento:", ["Sin Descuento", "Porcentaje (%)", "Monto Fijo (₡)"], key="pos_tipo_desc")
+                with c_d2:
+                    val_desc = st.number_input("Valor del Descuento:", min_value=0.0, value=0.0, key="pos_val_desc")
 
-            subtotal_vr = precio_u_vr * cant_vr
-            monto_desc_vr = subtotal_vr * (val_desc / 100.0) if tipo_desc == "Porcentaje (%)" else (val_desc if tipo_desc == "Monto Fijo (₡)" else 0.0)
-            total_final_vr = max(0.0, subtotal_vr - monto_desc_vr)
+                subtotal_vr = precio_u_vr * cant_vr
+                monto_desc_vr = subtotal_vr * (val_desc / 100.0) if tipo_desc == "Porcentaje (%)" else (val_desc if tipo_desc == "Monto Fijo (₡)" else 0.0)
+                total_final_vr = max(0.0, subtotal_vr - monto_desc_vr)
 
-            df_cli_vr = pd.read_sql("SELECT id_cliente || ' — ' || nombre AS display, id_cliente FROM clientes", conn)
+                df_cli_vr = pd.read_sql("SELECT id_cliente || ' — ' || nombre AS display, id_cliente FROM clientes", conn)
             
-            opciones_cli_pos = ["Venta General / Anónima"]
-            if not df_cli_vr.empty:
-                opciones_cli_pos.extend(list(df_cli_vr["display"]))
+                opciones_cli_pos = ["Venta General / Anónima"]
+                if not df_cli_vr.empty:
+                    opciones_cli_pos.extend(list(df_cli_vr["display"]))
             
-            cli_vr_selected = st.selectbox("Asignar a cliente (Opcional):", opciones_cli_pos, key="pos_cli_sel")
+                cli_vr_selected = st.selectbox("Asignar a cliente (Opcional):", opciones_cli_pos, key="pos_cli_sel")
 
-            st.markdown(f"### **Total Final:** ₡{total_final_vr:,.0f}")
+                st.markdown(f"### **Total Final:** ₡{total_final_vr:,.0f}")
 
-            if st.button("⚡ Procesar y Cobrar Venta", key="btn_pos_cobrar"):
-                if nombre_prod_vr and nombre_prod_vr.strip():
-                    prod_vr_clean = nombre_prod_vr.strip().capitalize()
-                    id_cli_final = df_cli_vr[df_cli_vr["display"] == cli_vr_selected]["id_cliente"].values[0] if cli_vr_selected != "Venta General / Anónima" else None
-                    if tipo_origen == "Del Stock General" and id_prod_inv is not None:
-                        c.execute("UPDATE productos SET cantidad = cantidad - ? WHERE id = ?", (cant_vr, id_prod_inv))
+                if st.button("⚡ Procesar y Cobrar Venta", key="btn_pos_cobrar"):
+                    if nombre_prod_vr and nombre_prod_vr.strip():
+                        prod_vr_clean = nombre_prod_vr.strip().capitalize()
+                        id_cli_final = df_cli_vr[df_cli_vr["display"] == cli_vr_selected]["id_cliente"].values[0] if cli_vr_selected != "Venta General / Anónima" else None
+                        if tipo_origen == "Del Stock General" and id_prod_inv is not None:
+                            c.execute("UPDATE productos SET cantidad = cantidad - ? WHERE id = ?", (cant_vr, id_prod_inv))
 
-                    fecha_ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    c.execute("INSERT INTO ventas_rapidas (fecha, id_cliente, producto, tipo, cantidad, precio_u, descuento, total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                              (fecha_ahora, id_cli_final, prod_vr_clean, tipo_origen, cant_vr, precio_u_vr, monto_desc_vr, total_final_vr))
-                    conn.commit()
-                    st.success("✅ Venta procesada correctamente.")
-                    if id_cli_final:
-                        path_fac, link_wa = generar_factura_imagen(id_cli_final)
-                        if path_fac and os.path.exists(path_fac):
-                            with open(path_fac, "rb") as file:
-                                st.download_button(
-                                    label="🖼️ Descargar Factura de Venta en Imagen",
-                                    data=file,
-                                    file_name=f"Factura_{id_cli_final}.jpg",
-                                    mime="image/jpeg",
-                                    key="dl_factura_pos"
-                                )
-                        if link_wa:
-                            st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Comprobante por WhatsApp</a>', unsafe_allow_html=True)
-                else:
-                    st.error("Ingresa o selecciona un producto válido para realizar la venta.")
-            st.markdown("</div>", unsafe_allow_html=True)
+                        fecha_ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        c.execute("INSERT INTO ventas_rapidas (fecha, id_cliente, producto, tipo, cantidad, precio_u, descuento, total) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                  (fecha_ahora, id_cli_final, prod_vr_clean, tipo_origen, cant_vr, precio_u_vr, monto_desc_vr, total_final_vr))
+                        conn.commit()
+                        st.success("✅ Venta procesada correctamente.")
+                        if id_cli_final:
+                            path_fac, link_wa = generar_factura_imagen(id_cli_final)
+                            if path_fac and os.path.exists(path_fac):
+                                with open(path_fac, "rb") as file:
+                                    st.download_button(
+                                        label="🖼️ Descargar Factura de Venta en Imagen",
+                                        data=file,
+                                        file_name=f"Factura_{id_cli_final}.jpg",
+                                        mime="image/jpeg",
+                                        key="dl_factura_pos"
+                                    )
+                            if link_wa:
+                                st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Comprobante por WhatsApp</a>', unsafe_allow_html=True)
+                    else:
+                        st.error("Ingresa o selecciona un producto válido para realizar la venta.")
 
         # 2. Inventario de Stock en Galería Y Edición
         elif menu_postventa == "📦 Inventario y Edición de Stock":
@@ -1128,105 +1377,100 @@ elif st.session_state.user_role == "admin":
                 unsafe_allow_html=True,
             )
             
-            st.markdown('<div class="form-card">', unsafe_allow_html=True)
-            st.markdown("<h4 style='color:#be185d;'>➕ Añadir Nuevo Producto al Inventario</h4>", unsafe_allow_html=True)
+            with card():
+                st.markdown("<h4 style='color:#be185d;'>➕ Añadir Nuevo Producto al Inventario</h4>", unsafe_allow_html=True)
             
-            with st.form("form_agregar_stock"):
-                col_i1, col_i2 = st.columns(2)
-                with col_i1:
-                    new_desc = st.text_input("Descripción del Producto", placeholder="Ej. Blusa elegante")
-                    new_precio = st.number_input("Precio (₡ CRC)", min_value=0.0, value=5000.0, step=500.0)
-                    new_cant = st.number_input("Stock Inicial", min_value=1, value=1, step=1)
-                with col_i2:
-                    new_tienda = st.text_input("Tienda / Proveedor", placeholder="Ej. Zara o Local")
-                    new_cat = st.text_input("Categoría", placeholder="Ej. Ropa")
-                    new_barcode = st.text_input("Código de Barras (Opcional)", placeholder="Escanea o escribe el código")
+                with st.form("form_agregar_stock", clear_on_submit=True):
+                    col_i1, col_i2 = st.columns(2)
+                    with col_i1:
+                        new_desc = st.text_input("Descripción del Producto", placeholder="Ej. Blusa elegante")
+                        new_precio = st.number_input("Precio (₡ CRC)", min_value=0.0, value=5000.0, step=500.0)
+                        new_cant = st.number_input("Stock Inicial", min_value=1, value=1, step=1)
+                    with col_i2:
+                        new_tienda = st.text_input("Tienda / Proveedor", placeholder="Ej. Zara o Local")
+                        new_cat = st.text_input("Categoría", placeholder="Ej. Ropa")
+                        new_barcode = st.text_input("Código de Barras (Opcional)", placeholder="Escanea o escribe el código")
                 
-                new_obs = st.text_area("Observaciones", placeholder="Detalles adicionales...", height=60)
+                    new_obs = st.text_area("Observaciones", placeholder="Detalles adicionales...", height=60)
                 
-                btn_add_stock = st.form_submit_button("💾 Guardar Producto en Inventario")
+                    btn_add_stock = st.form_submit_button("💾 Guardar Producto en Inventario")
                 
-                if btn_add_stock:
-                    if new_desc.strip():
-                        c.execute("""INSERT INTO productos (id_cliente, tienda, categoria, descripcion, precio, moneda, cantidad, estado, observaciones, codigo_barras)
-                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                                  (None, new_tienda.strip().capitalize(), new_cat.strip().capitalize(), new_desc.strip().capitalize(), new_precio, "CRC", new_cant, "Disponible en Inventario", new_obs.strip().capitalize() if new_obs else "", new_barcode.strip() if new_barcode else ""))
-                        conn.commit()
-                        st.success(f"¡Producto '{new_desc}' añadido al inventario exitosamente!")
-                        st.rerun()
-                    else:
-                        st.error("Debes ingresar al menos la descripción del producto.")
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="form-card">', unsafe_allow_html=True)
-            st.markdown("<h4 style='color:#be185d;'>📊 Tabla de Inventario (Stock General)</h4>", unsafe_allow_html=True)
-            df_stock_table = pd.read_sql("SELECT id, codigo_barras as 'Cód. Barras', descripcion as Producto, tienda as Tienda, categoria as Categoría, precio as Precio, cantidad as Stock FROM productos WHERE id_cliente IS NULL OR id_cliente = ''", conn)
-            st.dataframe(df_stock_table, use_container_width=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-
-            st.markdown('<div class="form-card">', unsafe_allow_html=True)
-            st.markdown("<h4 style='color:#be185d;'>✏️ Editar Producto del Stock</h4>", unsafe_allow_html=True)
-            if not df_stock_table.empty:
-                prod_edit_dict = {f"ID: {r['id']} - {r['Producto']}": r['id'] for _, r in df_stock_table.iterrows()}
-                prod_edit_sel = st.selectbox("Seleccionar producto a editar:", list(prod_edit_dict.keys()), key="inv_edit_sel")
-                id_prod_edit = prod_edit_dict[prod_edit_sel]
-
-                c.execute("SELECT descripcion, tienda, categoria, precio, cantidad, codigo_barras FROM productos WHERE id = ?", (id_prod_edit,))
-                p_edit_data = c.fetchone()
-                if p_edit_data:
-                    c_e1, c_e2 = st.columns(2)
-                    with c_e1:
-                        n_desc = st.text_input("Descripción", value=p_edit_data[0] or "", key="inv_ed_desc")
-                        n_precio = st.number_input("Precio", value=float(p_edit_data[3]) if p_edit_data[3] is not None else 0.0, step=500.0, key="inv_ed_pre")
-                        n_cant = st.number_input("Stock", value=int(p_edit_data[4]) if p_edit_data[4] is not None else 1, step=1, key="inv_ed_can")
-                    with c_e2:
-                        n_tienda = st.text_input("Tienda", value=p_edit_data[1] if p_edit_data[1] else "", key="inv_ed_tie")
-                        n_cat = st.text_input("Categoría", value=p_edit_data[2] if p_edit_data[2] else "", key="inv_ed_cat")
-                        n_barcode = st.text_input("Código de Barras", value=p_edit_data[5] if p_edit_data[5] else "", key="inv_ed_bar")
-
-                    c_b1, c_b2 = st.columns(2)
-                    with c_b1:
-                        if st.button("💾 Guardar Cambios de Stock", key="btn_inv_save"):
-                            c.execute("UPDATE productos SET descripcion=?, tienda=?, categoria=?, precio=?, cantidad=?, codigo_barras=? WHERE id=?", 
-                                      (n_desc.strip().capitalize(), n_tienda.strip().capitalize(), n_cat.strip().capitalize(), n_precio, n_cant, n_barcode.strip() if n_barcode else "", id_prod_edit))
+                    if btn_add_stock:
+                        if new_desc.strip():
+                            c.execute("""INSERT INTO productos (id_cliente, tienda, categoria, descripcion, precio, moneda, cantidad, estado, observaciones, codigo_barras)
+                                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                      (None, new_tienda.strip().capitalize(), new_cat.strip().capitalize(), new_desc.strip().capitalize(), new_precio, "CRC", new_cant, "Disponible en Inventario", new_obs.strip().capitalize() if new_obs else "", new_barcode.strip() if new_barcode else ""))
                             conn.commit()
-                            st.success("¡Producto en stock actualizado!")
+                            st.success(f"¡Producto '{new_desc}' añadido al inventario exitosamente!")
                             st.rerun()
-                    with c_b2:
-                        if st.button("🗑 Eliminar Producto", key="btn_inv_del"):
-                            c.execute("DELETE FROM productos WHERE id=?", (id_prod_edit,))
-                            conn.commit()
-                            st.warning("Producto eliminado del inventario.")
-                            st.rerun()
-            else:
-                st.info("No hay productos en el stock general para editar.")
-            st.markdown('</div>', unsafe_allow_html=True)
-            
-            st.markdown('<div class="form-card">', unsafe_allow_html=True)
-            st.markdown("<h4 style='color:#be185d;'>📸 Galería de Productos Locales</h4>", unsafe_allow_html=True)
-            df_stock = pd.read_sql("SELECT id, descripcion, precio, cantidad, categoria, tienda, foto_path, codigo_barras FROM productos WHERE id_cliente IS NULL OR id_cliente = ''", conn)
-            
-            if df_stock.empty:
-                st.info("No hay productos generales en stock actualmente.")
-            else:
-                for _, r in df_stock.iterrows():
-                    st.markdown('<div class="form-card" style="border: 2px solid #F3B2C9; padding: 16px; border-radius: 14px; margin-bottom: 15px;">', unsafe_allow_html=True)
-                    col_img, col_info = st.columns([1, 2])
-                    with col_img:
-                        if r["foto_path"] and os.path.exists(os.path.join("fotos_productos", r["foto_path"])):
-                            st.image(os.path.join("fotos_productos", r["foto_path"]))
                         else:
-                            st.caption("📷 Sin foto disponible")
-                    with col_info:
-                        st.markdown(f"✨ **{r['descripcion']}**")
-                        st.markdown(f"📦 Stock Disponible: **{int(r['cantidad'] if pd.notna(r['cantidad']) else 1)}**")
+                            st.error("Debes ingresar al menos la descripción del producto.")
+            
+            with card():
+                st.markdown("<h4 style='color:#be185d;'>📊 Tabla de Inventario (Stock General)</h4>", unsafe_allow_html=True)
+                df_stock_table = pd.read_sql("SELECT id, codigo_barras as 'Cód. Barras', descripcion as Producto, tienda as Tienda, categoria as Categoría, precio as Precio, cantidad as Stock FROM productos WHERE id_cliente IS NULL OR id_cliente = ''", conn)
+                st.dataframe(df_stock_table, use_container_width=True)
+
+            with card():
+                st.markdown("<h4 style='color:#be185d;'>✏️ Editar Producto del Stock</h4>", unsafe_allow_html=True)
+                if not df_stock_table.empty:
+                    prod_edit_dict = {f"ID: {r['id']} - {r['Producto']}": r['id'] for _, r in df_stock_table.iterrows()}
+                    prod_edit_sel = st.selectbox("Seleccionar producto a editar:", list(prod_edit_dict.keys()), key="inv_edit_sel")
+                    id_prod_edit = prod_edit_dict[prod_edit_sel]
+
+                    c.execute("SELECT descripcion, tienda, categoria, precio, cantidad, codigo_barras FROM productos WHERE id = ?", (id_prod_edit,))
+                    p_edit_data = c.fetchone()
+                    if p_edit_data:
+                        c_e1, c_e2 = st.columns(2)
+                        with c_e1:
+                            n_desc = st.text_input("Descripción", value=p_edit_data[0] or "", key="inv_ed_desc")
+                            n_precio = st.number_input("Precio", value=float(p_edit_data[3]) if p_edit_data[3] is not None else 0.0, step=500.0, key="inv_ed_pre")
+                            n_cant = st.number_input("Stock", value=int(p_edit_data[4]) if p_edit_data[4] is not None else 1, step=1, key="inv_ed_can")
+                        with c_e2:
+                            n_tienda = st.text_input("Tienda", value=p_edit_data[1] if p_edit_data[1] else "", key="inv_ed_tie")
+                            n_cat = st.text_input("Categoría", value=p_edit_data[2] if p_edit_data[2] else "", key="inv_ed_cat")
+                            n_barcode = st.text_input("Código de Barras", value=p_edit_data[5] if p_edit_data[5] else "", key="inv_ed_bar")
+
+                        c_b1, c_b2 = st.columns(2)
+                        with c_b1:
+                            if st.button("💾 Guardar Cambios de Stock", key="btn_inv_save"):
+                                c.execute("UPDATE productos SET descripcion=?, tienda=?, categoria=?, precio=?, cantidad=?, codigo_barras=? WHERE id=?", 
+                                          (n_desc.strip().capitalize(), n_tienda.strip().capitalize(), n_cat.strip().capitalize(), n_precio, n_cant, n_barcode.strip() if n_barcode else "", id_prod_edit))
+                                conn.commit()
+                                st.success("¡Producto en stock actualizado!")
+                                st.rerun()
+                        with c_b2:
+                            if st.button("🗑 Eliminar Producto", key="btn_inv_del"):
+                                c.execute("DELETE FROM productos WHERE id=?", (id_prod_edit,))
+                                conn.commit()
+                                st.warning("Producto eliminado del inventario.")
+                                st.rerun()
+                else:
+                    st.info("No hay productos en el stock general para editar.")
+            
+            with card():
+                st.markdown("<h4 style='color:#be185d;'>📸 Galería de Productos Locales</h4>", unsafe_allow_html=True)
+                df_stock = pd.read_sql("SELECT id, descripcion, precio, cantidad, categoria, tienda, foto_path, codigo_barras FROM productos WHERE id_cliente IS NULL OR id_cliente = ''", conn)
+            
+                if df_stock.empty:
+                    st.info("No hay productos generales en stock actualmente.")
+                else:
+                    for _, r in df_stock.iterrows():
+                        with card("sub"):
+                            col_img, col_info = st.columns([1, 2])
+                            with col_img:
+                                if r["foto_path"] and os.path.exists(os.path.join("fotos_productos", r["foto_path"])):
+                                    st.image(os.path.join("fotos_productos", r["foto_path"]))
+                                else:
+                                    st.caption("📷 Sin foto disponible")
+                            with col_info:
+                                st.markdown(f"✨ **{r['descripcion']}**")
+                                st.markdown(f"📦 Stock Disponible: **{int(r['cantidad'] if pd.notna(r['cantidad']) else 1)}**")
                         
-                        barcode_txt = r['codigo_barras'] if pd.notna(r['codigo_barras']) and r['codigo_barras'] != '' else 'N/A'
-                        st.caption(f"🏷️ Categoría: {r['categoria']} | Tienda: {r['tienda']} | 📌 Cód. Barras: {barcode_txt}")
+                                barcode_txt = r['codigo_barras'] if pd.notna(r['codigo_barras']) and r['codigo_barras'] != '' else 'N/A'
+                                st.caption(f"🏷️ Categoría: {r['categoria']} | Tienda: {r['tienda']} | 📌 Cód. Barras: {barcode_txt}")
                         
-                        st.markdown(f"💰 Precio: **₡{(r['precio'] or 0.0):,.0f}**")
-                    st.markdown('</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
+                                st.markdown(f"💰 Precio: **₡{(r['precio'] or 0.0):,.0f}**")
 
 # -------------------------------------------------------------
 # 6. PANEL DE CLIENTE / EMPRENDEDOR
@@ -1250,55 +1494,55 @@ elif st.session_state.user_role == "client":
     total_compras = total_articulos + caja_precio_c
     saldo_pendiente = total_compras - total_abonos
 
-    col_cli1, col_cli2 = st.columns([3, 1])
+    col_cli1, col_cli2 = st.columns([4, 1])
     with col_cli1:
-        st.markdown(f"<h3 style='color: #be185d;'>🛍️ Hola, {client_name}</h3>", unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="app-header"><span class="app-brand">Hola, {html.escape(str(client_name))}</span><span class="app-role">Tu cuenta</span></div>',
+            unsafe_allow_html=True,
+        )
     with col_cli2:
         if st.button("🚪 Salir", key="btn_salir_client"):
             st.session_state.user_role = None
             st.session_state.current_client = None
             st.rerun()
 
-    st.markdown('<div class="form-card">', unsafe_allow_html=True)
-    st.markdown("<h4 style='color:#be185d;'>💰 Estado de Cuenta</h4>", unsafe_allow_html=True)
-    if caja_nombre_c:
-        st.caption(f"💼 Caja Asignada: **{caja_nombre_c}** | Cuota: **₡{caja_precio_c:,.0f}**")
+    with card():
+        st.markdown("<h4 style='color:#be185d;'>💰 Estado de Cuenta</h4>", unsafe_allow_html=True)
+        if caja_nombre_c:
+            st.caption(f"💼 Caja Asignada: **{caja_nombre_c}** | Cuota: **₡{caja_precio_c:,.0f}**")
         
-    col_m1, col_m2, col_m3 = st.columns(3)
-    col_m1.metric("Total Cargos", f"₡{total_compras:,.0f}")
-    col_m2.metric("Total Abonado", f"₡{total_abonos:,.0f}")
-    col_m3.metric("Saldo Pendiente", f"₡{max(0.0, saldo_pendiente):,.0f}")
-    st.markdown("</div>", unsafe_allow_html=True)
+        col_m1, col_m2, col_m3 = st.columns(3)
+        col_m1.metric("Total Cargos", f"₡{total_compras:,.0f}")
+        col_m2.metric("Total Abonado", f"₡{total_abonos:,.0f}")
+        col_m3.metric("Saldo Pendiente", f"₡{max(0.0, saldo_pendiente):,.0f}")
 
     notifs = pd.read_sql("SELECT titulo, mensaje, fecha FROM notificaciones WHERE id_cliente = ? ORDER BY id DESC LIMIT 5", conn, params=(id_cli,))
     if not notifs.empty:
-        st.markdown('<div class="form-card">', unsafe_allow_html=True)
-        st.markdown("<h4 style='color:#be185d;'>🔔 Notificaciones Recientes</h4>", unsafe_allow_html=True)
-        for _, row in notifs.iterrows():
-            st.markdown(f"**{row['titulo']}** ({row['fecha']})")
-            st.caption(row["mensaje"])
-            st.divider()
-        st.markdown("</div>", unsafe_allow_html=True)
+        with card():
+            st.markdown("<h4 style='color:#be185d;'>🔔 Notificaciones Recientes</h4>", unsafe_allow_html=True)
+            for _, row in notifs.iterrows():
+                st.markdown(f"**{row['titulo']}** ({row['fecha']})")
+                st.caption(row["mensaje"])
+                st.divider()
 
-    st.markdown('<div class="form-card">', unsafe_allow_html=True)
-    st.markdown("<h4 style='color:#be185d;'>📦 Tus Pedidos / Artículos</h4>", unsafe_allow_html=True)
-    if prods.empty:
-        st.info("Aún no tienes artículos registrados.")
-    else:
-        for _, row in prods.iterrows():
-            col_img, col_info = st.columns([1, 2])
-            with col_img:
-                if row["foto_path"] and os.path.exists(os.path.join("fotos_productos", row["foto_path"])):
-                    st.image(os.path.join("fotos_productos", row["foto_path"]))
-                else:
-                    st.text("📷 Sin foto")
-            with col_info:
-                st.markdown(f"**{row['descripcion']}**")
-                st.caption(f"Tienda: {row['tienda']} | Estado: {row['estado']}")
+    with card():
+        st.markdown("<h4 style='color:#be185d;'>📦 Tus Pedidos / Artículos</h4>", unsafe_allow_html=True)
+        if prods.empty:
+            st.info("Aún no tienes artículos registrados.")
+        else:
+            for _, row in prods.iterrows():
+                col_img, col_info = st.columns([1, 2])
+                with col_img:
+                    if row["foto_path"] and os.path.exists(os.path.join("fotos_productos", row["foto_path"])):
+                        st.image(os.path.join("fotos_productos", row["foto_path"]))
+                    else:
+                        st.text("📷 Sin foto")
+                with col_info:
+                    st.markdown(f"**{row['descripcion']}**")
+                    st.caption(f"Tienda: {row['tienda']} | Estado: {row['estado']}")
                 
-                cant_prod = int(row['cantidad'] if pd.notna(row['cantidad']) else 1)
-                precio_prod = row['precio'] if pd.notna(row['precio']) else 0.0
-                tot_prod = precio_prod * cant_prod
-                st.markdown(f"📦 Cantidad: {cant_prod} | 💰 **Total: ₡{tot_prod:,.0f}**")
-            st.divider()
-    st.markdown("</div>", unsafe_allow_html=True)
+                    cant_prod = int(row['cantidad'] if pd.notna(row['cantidad']) else 1)
+                    precio_prod = row['precio'] if pd.notna(row['precio']) else 0.0
+                    tot_prod = precio_prod * cant_prod
+                    st.markdown(f"📦 Cantidad: {cant_prod} | 💰 **Total: ₡{tot_prod:,.0f}**")
+                st.divider()

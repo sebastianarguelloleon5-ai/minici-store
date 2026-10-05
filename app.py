@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 import io
 import pandas as pd
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageChops
 import streamlit as st
 import urllib.parse
 import html
@@ -124,8 +124,137 @@ if not os.path.exists("facturas_generadas"):
     os.makedirs("facturas_generadas")
 
 # -------------------------------------------------------------
-# FUNCIÓN PARA GENERAR IMAGEN DE FACTURA Y ENLACE WHATSAPP
+# FACTURAS: IMAGEN + MENSAJE DE WHATSAPP
 # -------------------------------------------------------------
+import functools
+
+FACT_COLORS = {
+    "raspberry": "#BE185D", "plum": "#831843", "brand": "#F3B2C9",
+    "soft": "#FDF2F8", "zebra": "#FFF7FB", "line": "#F6D5E4",
+    "text": "#1F2937", "muted": "#6B7280", "green": "#059669",
+    "orange": "#F5A623", "white": "#FFFFFF",
+}
+
+_FUENTES_REG = [
+    "arial.ttf", "Arial.ttf", "LiberationSans-Regular.ttf", "DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+]
+_FUENTES_BOLD = [
+    "arialbd.ttf", "Arial Bold.ttf", "LiberationSans-Bold.ttf", "DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
+    "/Library/Fonts/Arial Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+]
+
+
+def _tiene_colon(font):
+    """True si la fuente sabe dibujar el símbolo ₡ (colón)."""
+    try:
+        return font.getmask("₡").tobytes() != font.getmask("\ue000").tobytes()
+    except Exception:
+        return True
+
+
+@functools.lru_cache(maxsize=32)
+def _fuente(bold, size):
+    nombres = list(_FUENTES_BOLD if bold else _FUENTES_REG)
+    try:  # DejaVu viene incluida con matplotlib, si está instalado
+        import matplotlib
+        mp = os.path.join(matplotlib.get_data_path(), "fonts", "ttf")
+        nombres.append(os.path.join(mp, "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"))
+    except Exception:
+        pass
+    for n in nombres:
+        try:
+            f = ImageFont.truetype(n, size)
+        except Exception:
+            continue
+        if _tiene_colon(f):
+            return f
+    try:
+        return ImageFont.load_default(size)
+    except TypeError:
+        return ImageFont.load_default()
+
+
+@functools.lru_cache(maxsize=1)
+def _logo_factura():
+    """Busca el logo igual que el resto de la app, lo recorta a su contenido
+    y devuelve (imagen, color_de_fondo)."""
+    for nombre in ["logo.jpg", "logo.png", "logo.jpeg", "21237.jpg"]:
+        if os.path.exists(nombre):
+            try:
+                im = Image.open(nombre).convert("RGB")
+                bg = im.getpixel((4, 4))
+                diff = ImageChops.difference(im, Image.new("RGB", im.size, bg)).convert("L")
+                bbox = diff.point(lambda p: 255 if p > 14 else 0).getbbox()
+                if bbox:
+                    pad = 14
+                    bbox = (max(0, bbox[0] - pad), max(0, bbox[1] - pad),
+                            min(im.width, bbox[2] + pad), min(im.height, bbox[3] + pad))
+                    im = im.crop(bbox)
+                return im, bg
+            except Exception:
+                continue
+    return None, None
+
+
+def _crc(v):
+    return f"₡{(v or 0):,.0f}"
+
+
+def _etiqueta_caja(nombre_caja):
+    n = str(nombre_caja).strip()
+    return n if "caja" in n.lower() else f"Caja {n}"
+
+
+def _recortar_msg(txt, n):
+    txt = str(txt).strip()
+    return txt if len(txt) <= n else txt[: n - 1].rstrip() + "…"
+
+
+def _mensaje_whatsapp(nombre_cliente, prods, nombre_caja, precio_caja,
+                      total_compras, total_abonos, saldo_pendiente):
+    linea = "━━━━━━━━━━━━━━"
+    m = "🛍️ *MINICI STORE* ✨\n_Personal Shopper_\n" + linea + "\n\n"
+    m += f"¡Hola *{nombre_cliente}*! 💖\n"
+    m += f"Este es el resumen de tu cuenta al *{datetime.now().strftime('%d/%m/%Y')}*:\n\n"
+
+    if prods:
+        m += "📦 *Tus pedidos*\n"
+        for p in prods[:6]:
+            cant = p[2] if p[2] else 1
+            sub = (p[1] or 0.0) * cant
+            x = f" ×{cant}" if cant > 1 else ""
+            m += f"• {_recortar_msg(p[0], 28)}{x} — {_crc(sub)}\n"
+        if len(prods) > 6:
+            m += f"• _y {len(prods) - 6} más en tu factura_\n"
+        m += "\n"
+    if nombre_caja and precio_caja > 0:
+        m += f"💼 *{_etiqueta_caja(nombre_caja)}* — {_crc(precio_caja)}\n\n"
+
+    m += linea + "\n"
+    m += f"🧾 Total compras: {_crc(total_compras)}\n"
+    m += f"✅ Total abonado: {_crc(total_abonos)}\n"
+    if saldo_pendiente > 0:
+        m += f"💰 *Saldo pendiente: {_crc(saldo_pendiente)}*\n"
+    else:
+        m += "🎉 *¡Tu cuenta está al día!*\n"
+    m += linea + "\n\n"
+    m += "Te comparto tu factura en imagen 🖼️\n¡Gracias por confiar en Minici Store! 🌸"
+    return m
+
+
 def generar_factura_imagen(id_cliente):
     c.execute("SELECT nombre, telefono FROM clientes WHERE id_cliente = ?", (id_cliente,))
     res_cli = c.fetchone()
@@ -133,7 +262,7 @@ def generar_factura_imagen(id_cliente):
         return None, None
 
     nombre_cliente, telefono = res_cli
-    
+
     c.execute("SELECT nombre_caja, precio_caja FROM cajas_emprendedores WHERE id_cliente = ?", (id_cliente,))
     res_caja = c.fetchone()
     nombre_caja, precio_caja = (res_caja[0], res_caja[1] or 0.0) if res_caja else (None, 0.0)
@@ -148,96 +277,239 @@ def generar_factura_imagen(id_cliente):
     total_compras = total_articulos + precio_caja
     saldo_pendiente = total_compras - total_abonos
 
-    img_w, img_h = 800, 1050
-    img = Image.new("RGB", (img_w, img_h), color="#FFFFFF")
+    # ---------- Lienzo (se dibuja al doble y se reduce para bordes suaves) ----------
+    K = FACT_COLORS
+    S, W = 2, 1000
+    logo, bg_logo = _logo_factura()
+    header_bg = bg_logo if bg_logo else "#FEEFF6"
+
+    filas = []
+    if nombre_caja and precio_caja > 0:
+        filas.append((f"{_etiqueta_caja(nombre_caja)} · cuota mensual", "1", "Mensual", precio_caja))
+    for p in prods:
+        cant = p[2] if p[2] else 1
+        filas.append((str(p[0] or ""), str(cant), str(p[3] or ""), (p[1] or 0.0) * cant))
+
+    header_h, row_h = 250, 58
+    client_top, client_h = header_h + 36, 130
+    table_top = client_top + client_h + 36
+    rows_top = table_top + 54
+    rows_h = max(len(filas), 1) * row_h
+    tot_top = rows_top + rows_h + 40
+    footer_top = tot_top + 46 * 2 + 96 + 56
+    H = footer_top + 120
+
+    img = Image.new("RGB", (W * S, H * S), K["white"])
     draw = ImageDraw.Draw(img)
 
-    draw.rectangle([(0, 0), (img_w, 140)], fill="#F3B2C9")
-    
-    try:
-        font_title = ImageFont.truetype("arial.ttf", 28)
-        font_subtitle = ImageFont.truetype("arial.ttf", 16)
-        font_bold = ImageFont.truetype("arial.ttf", 16)
-        font_regular = ImageFont.truetype("arial.ttf", 15)
-    except IOError:
-        font_title = font_subtitle = font_bold = font_regular = ImageFont.load_default()
+    def F(bold, size):
+        return _fuente(bold, size * S)
 
-    draw.text((40, 30), "🛍️ MINICI STORE", fill="#0f172a", font=font_title)
-    draw.text((40, 75), "Comprobante de Estado de Cuenta & Pedidos", fill="#0f172a", font=font_subtitle)
-    
-    fecha_str = datetime.now().strftime("%d/%m/%Y %H:%M")
-    draw.text((530, 40), f"Fecha: {fecha_str}", fill="#0f172a", font=font_subtitle)
-    draw.text((530, 70), f"Ref Clienta: {id_cliente}", fill="#0f172a", font=font_subtitle)
+    def R(box, fill=None, outline=None, width=1, r=0):
+        b = [v * S for v in box]
+        if r:
+            draw.rounded_rectangle(b, radius=r * S, fill=fill, outline=outline, width=width * S)
+        else:
+            draw.rectangle(b, fill=fill, outline=outline, width=width * S)
 
-    draw.rectangle([(40, 160), (760, 230)], outline="#F3B2C9", width=2, fill="#fdf2f8")
-    draw.text((60, 172), f"Cliente: {nombre_cliente}", fill="#0f172a", font=font_bold)
-    draw.text((500, 172), f"Tel: {telefono if telefono else 'No registrado'}", fill="#0f172a", font=font_regular)
-    
+    def tw(txt, font):
+        return draw.textlength(txt, font=font) / S
+
+    def T(x, y, txt, font, fill, align="l"):
+        w = tw(txt, font)
+        if align == "r":
+            x -= w
+        elif align == "c":
+            x -= w / 2
+        draw.text((x * S, y * S), txt, font=font, fill=fill)
+
+    def ajustar(txt, font, maxw):
+        if tw(txt, font) <= maxw:
+            return txt
+        while txt and tw(txt + "…", font) > maxw:
+            txt = txt[:-1]
+        return txt.rstrip() + "…"
+
+    # ---------- Encabezado con logo ----------
+    R((0, 0, W, header_h), fill=header_bg)
+    if logo:
+        lh = 190
+        lw = int(logo.width * lh / logo.height)
+        if lw > 460:
+            lw, lh = 460, int(logo.height * 460 / logo.width)
+        logo_r = logo.resize((lw * S, lh * S), Image.LANCZOS)
+        img.paste(logo_r, (44 * S, ((header_h - lh) // 2) * S))
+    else:
+        T(44, 88, "Minici Store", F(True, 46), K["raspberry"])
+    T(W - 44, 74, "ESTADO DE CUENTA", F(True, 30), K["plum"], "r")
+    T(W - 44, 122, datetime.now().strftime("%d/%m/%Y  ·  %H:%M"), F(False, 20), K["muted"], "r")
+    T(W - 44, 152, f"Ref. {id_cliente}", F(True, 20), K["raspberry"], "r")
+    R((0, header_h, W, header_h + 6), fill=K["raspberry"])
+    R((0, header_h, 150, header_h + 6), fill=K["orange"])
+
+    # ---------- Tarjeta de clienta ----------
+    R((40, client_top, W - 40, client_top + client_h), fill=K["soft"], outline=K["line"], width=2, r=20)
+    T(66, client_top + 20, "CLIENTA", F(True, 15), K["raspberry"])
+    T(66, client_top + 44, ajustar(str(nombre_cliente), F(True, 32), 520), F(True, 32), K["text"])
+    T(66, client_top + 90, f"Tel: {telefono if telefono else 'No registrado'}", F(False, 20), K["muted"])
     if nombre_caja:
-        draw.text((60, 200), f"💼 Caja Asignada: {nombre_caja} (₡{precio_caja:,.0f})", fill="#be185d", font=font_bold)
+        etq = _etiqueta_caja(nombre_caja)
+        fp = F(True, 20)
+        pw = tw(etq, fp) + 44
+        R((W - 66 - pw, client_top + 43, W - 66, client_top + 87), fill=K["raspberry"], r=22)
+        T(W - 66 - pw / 2, client_top + 53, etq, fp, K["white"], "c")
 
-    y = 260
-    draw.text((40, y), "DETALLE DE ARTÍCULOS / PEDIDOS:", fill="#be185d", font=font_bold)
-    y += 35
+    # ---------- Tabla de detalle ----------
+    R((40, table_top, W - 40, table_top + 52), fill=K["raspberry"], r=14)
+    fh = F(True, 19)
+    T(66, table_top + 14, "Descripción", fh, K["white"])
+    T(600, table_top + 14, "Cant.", fh, K["white"], "c")
+    T(670, table_top + 14, "Estado", fh, K["white"])
+    T(W - 66, table_top + 14, "Total", fh, K["white"], "r")
 
-    draw.rectangle([(40, y), (760, y + 35)], fill="#f1f5f9")
-    draw.text((50, y + 8), "Descripción", fill="#0f172a", font=font_bold)
-    draw.text((430, y + 8), "Cant", fill="#0f172a", font=font_bold)
-    draw.text((520, y + 8), "Estado", fill="#0f172a", font=font_bold)
-    draw.text((650, y + 8), "Total", fill="#0f172a", font=font_bold)
-    y += 45
+    if not filas:
+        T(W / 2, rows_top + 16, "Aún no hay artículos registrados", F(False, 21), K["muted"], "c")
+    fd, fb = F(False, 21), F(True, 21)
+    fe = F(False, 19)
+    for i, (desc, cant, estado, subtot) in enumerate(filas):
+        y = rows_top + i * row_h
+        if i % 2 == 0:
+            R((40, y, W - 40, y + row_h), fill=K["zebra"])
+        T(66, y + 17, ajustar(desc, fd, 480), fd, K["text"])
+        T(600, y + 17, cant, fd, K["text"], "c")
+        T(670, y + 18, ajustar(estado, fe, 170), fe, K["muted"])
+        T(W - 66, y + 17, _crc(subtot), fb, K["text"], "r")
+    R((40, rows_top + rows_h, W - 40, rows_top + rows_h + 2), fill=K["brand"])
 
-    if nombre_caja and precio_caja > 0:
-        draw.text((50, y), f"Alquiler/Cuota: {nombre_caja}", fill="#334155", font=font_regular)
-        draw.text((440, y), "1", fill="#334155", font=font_regular)
-        draw.text((520, y), "Caja Mensual", fill="#64748b", font=font_regular)
-        draw.text((640, y), f"₡{precio_caja:,.0f}", fill="#0f172a", font=font_bold)
-        y += 35
+    # ---------- Totales ----------
+    y = tot_top
+    T(500, y + 6, "Total compras", F(False, 21), K["muted"])
+    T(W - 66, y + 4, _crc(total_compras), F(True, 24), K["text"], "r")
+    y += 46
+    T(500, y + 6, "Total abonado", F(False, 21), K["muted"])
+    T(W - 66, y + 4, _crc(total_abonos), F(True, 24), K["green"], "r")
+    y += 54
+    al_dia = saldo_pendiente <= 0
+    R((470, y, W - 40, y + 96), fill=K["green"] if al_dia else K["raspberry"], r=20)
+    T(500, y + 16, "CUENTA AL DÍA" if al_dia else "SALDO PENDIENTE", F(True, 17), K["white"])
+    T(500, y + 44, _crc(max(0.0, saldo_pendiente)), F(True, 38), K["white"])
 
-    for p in prods:
-        desc, precio, cant, estado = p[0], (p[1] or 0.0), (p[2] if p[2] else 1), (p[3] or "")
-        subtot = precio * cant
-        draw.text((50, y), str(desc)[:35], fill="#334155", font=font_regular)
-        draw.text((440, y), str(cant), fill="#334155", font=font_regular)
-        draw.text((520, y), str(estado)[:18], fill="#64748b", font=font_regular)
-        draw.text((640, y), f"₡{subtot:,.0f}", fill="#0f172a", font=font_bold)
-        y += 35
+    # ---------- Pie ----------
+    R((0, footer_top, W, H), fill=K["soft"])
+    R((0, footer_top, W, footer_top + 5), fill=K["brand"])
+    T(W / 2, footer_top + 28, "¡Gracias por tu preferencia en Minici Store!", F(True, 25), K["plum"], "c")
+    T(W / 2, footer_top + 72, "P E R S O N A L   S H O P P E R", F(False, 15), K["muted"], "c")
 
-    y = max(y + 40, 720)
-    draw.line([(40, y), (760, y)], fill="#cbd5e1", width=2)
-    y += 20
-
-    draw.text((450, y), "Total Cargos/Compras:", fill="#64748b", font=font_regular)
-    draw.text((640, y), f"₡{total_compras:,.0f}", fill="#0f172a", font=font_bold)
-    y += 35
-
-    draw.text((450, y), "Total Abonado:", fill="#64748b", font=font_regular)
-    draw.text((640, y), f"₡{total_abonos:,.0f}", fill="#059669", font=font_bold)
-    y += 45
-
-    draw.rectangle([(430, y), (760, y + 55)], fill="#fdf2f8", outline="#F3B2C9", width=2)
-    draw.text((450, y + 15), "SALDO PENDIENTE:", fill="#be185d", font=font_bold)
-    draw.text((630, y + 12), f"₡{max(0.0, saldo_pendiente):,.0f}", fill="#be185d", font=font_title)
-
-    draw.text((250, 970), "✨ ¡Gracias por tu preferencia en Minici Store! ✨", fill="#94a3b8", font=font_subtitle)
-
-    filename = f"factura_{id_cliente}.jpg"
-    filepath = os.path.join("facturas_generadas", filename)
-    img.save(filepath, "JPEG")
+    img = img.resize((W, H), Image.LANCZOS)
+    os.makedirs("facturas_generadas", exist_ok=True)
+    filepath = os.path.join("facturas_generadas", f"factura_{id_cliente}.jpg")
+    img.save(filepath, "JPEG", quality=92, optimize=True)
 
     telefono_clean = "".join(filter(str.isdigit, str(telefono))) if telefono else ""
     if len(telefono_clean) == 8:
         telefono_clean = "506" + telefono_clean
 
-    mensaje = f"🛍 *MINICI STORE - ESTADO DE CUENTA*\n\n"
-    mensaje += f"¡Hola *{nombre_cliente}*! 👋\n"
-    mensaje += f"Te adjuntamos tu factura digital con el resumen de tus compras y abonos.\n\n"
-    mensaje += f"🔴 *Saldo Pendiente:* ₡{max(0.0, saldo_pendiente):,.0f}\n\n"
-    mensaje += "¡Muchas gracias por tu preferencia! ✨"
-
+    mensaje = _mensaje_whatsapp(nombre_cliente, prods, nombre_caja, precio_caja,
+                                total_compras, total_abonos, saldo_pendiente)
     link = f"https://wa.me/{telefono_clean}?text={urllib.parse.quote(mensaje)}" if telefono_clean else None
 
     return filepath, link
+
+def escanear_codigo_barras(key_suffix, label="📷 Escanear código de barras con la cámara"):
+    """
+    Muestra un botón que abre la cámara (celular o computadora) y lee un
+    código de barras con la librería html5-qrcode. El valor leído se guarda
+    en st.session_state[f"codigo_{key_suffix}"] y la página se recarga sola.
+    Si el equipo tiene un lector físico USB/Bluetooth, no hace falta esto:
+    esos lectores escriben directo en el campo de texto como si fuera un teclado.
+    """
+    import streamlit.components.v1 as components
+
+    query_key = f"scan_{key_suffix}"
+    valor_leido = st.query_params.get(query_key)
+    if valor_leido:
+        st.session_state[f"codigo_{key_suffix}"] = valor_leido
+        del st.query_params[query_key]
+        st.toast(f"✅ Código escaneado: {valor_leido}")
+
+    with st.expander(label):
+        components.html(
+            f"""
+            <div style="font-family:'DM Sans',sans-serif;">
+              <div id="reader-{key_suffix}" style="width:100%; max-width:420px;"></div>
+              <p id="status-{key_suffix}" style="color:#7C6572; font-size:13px; margin-top:6px;">
+                Presiona permitir para activar la cámara y apunta al código de barras.
+              </p>
+            </div>
+            <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+            <script>
+              const statusEl_{key_suffix} = document.getElementById("status-{key_suffix}");
+              function onScan_{key_suffix}(decodedText) {{
+                  statusEl_{key_suffix}.innerText = "✅ Código detectado: " + decodedText;
+                  const url = new URL(window.parent.location.href);
+                  url.searchParams.set("{query_key}", decodedText);
+                  window.parent.location.href = url.toString();
+              }}
+              const scanner_{key_suffix} = new Html5Qrcode("reader-{key_suffix}");
+              Html5Qrcode.getCameras().then(cams => {{
+                  if (cams && cams.length) {{
+                      const camId = cams.length > 1 ? cams[cams.length - 1].id : cams[0].id;
+                      scanner_{key_suffix}.start(
+                          camId,
+                          {{ fps: 10, qrbox: {{ width: 260, height: 140 }} }},
+                          onScan_{key_suffix}
+                      ).catch(err => {{ statusEl_{key_suffix}.innerText = "⚠️ No se pudo abrir la cámara: " + err; }});
+                  }} else {{
+                      statusEl_{key_suffix}.innerText = "⚠️ No se encontró ninguna cámara disponible.";
+                  }}
+              }}).catch(err => {{ statusEl_{key_suffix}.innerText = "⚠️ Sin acceso a cámaras: " + err; }});
+            </script>
+            """,
+            height=320,
+        )
+
+
+# ==========================================
+# TALLAS DE CAJAS DE EMPRENDEDORES
+# ==========================================
+# Precio fijo en dólares por talla. La app guarda el precio en colones (₡),
+# convertido con el tipo de cambio que se indique al asignar la caja.
+TALLAS_CAJA_USD = {"S": 135.0, "M": 185.0, "L": 220.0, "XL": 265.0}
+TIPO_CAMBIO_DEFAULT = 520.0  # ₡ por cada US$1 (ajustable en pantalla)
+
+
+def talla_desde_nombre(nombre_caja):
+    """Devuelve la talla (S/M/L/XL) si el nombre guardado es 'Talla X', si no None."""
+    if nombre_caja:
+        txt = str(nombre_caja).strip().upper().replace("TALLA", "").strip()
+        if txt in TALLAS_CAJA_USD:
+            return txt
+    return None
+
+
+def selector_talla_caja(key_prefix, nombre_actual=None):
+    """Muestra selector de talla + tipo de cambio y devuelve (nombre_caja, precio_crc)."""
+    tallas = list(TALLAS_CAJA_USD.keys())
+    actual = talla_desde_nombre(nombre_actual)
+    c1, c2 = st.columns(2)
+    with c1:
+        talla = st.selectbox(
+            "Talla de la caja", tallas,
+            index=tallas.index(actual) if actual else 1,
+            format_func=lambda t: f"{t} — US${TALLAS_CAJA_USD[t]:,.0f}",
+            key=f"{key_prefix}_talla",
+        )
+    with c2:
+        tc = st.number_input("Tipo de cambio (₡ por US$1)", min_value=1.0,
+                             value=float(TIPO_CAMBIO_DEFAULT), step=1.0,
+                             key=f"{key_prefix}_tc")
+    usd = TALLAS_CAJA_USD[talla]
+    crc = round(usd * tc)
+    st.caption(f"💵 Talla {talla}: US${usd:,.0f} × ₡{tc:,.0f} = **₡{crc:,.0f}**")
+    if nombre_actual and not actual:
+        st.caption(f"ℹ️ Caja actual (sin talla): {nombre_actual}. Al guardar se reemplaza por la talla elegida.")
+    return f"Talla {talla}", float(crc)
+
 
 # -------------------------------------------------------------
 # 3. ESTILOS CSS GLOBALES
@@ -835,8 +1107,7 @@ elif st.session_state.user_role == "admin":
                     if "EMP" in tipo_registro:
                         st.markdown("---")
                         st.markdown("💼 **Configuración de Caja para Emprendedor:**")
-                        nombre_caja_in = st.text_input("Identificación / Nombre de la Caja", placeholder="Ej. Caja #01 - Accesorios", value="Caja #01")
-                        precio_caja_in = st.number_input("Precio o Alquiler Mensual de Caja (₡ CRC)", min_value=0.0, value=0.0, step=1000.0)
+                        nombre_caja_in, precio_caja_in = selector_talla_caja("reg_caja")
 
                     btn_guardar_cli = st.form_submit_button("Guardar Registro")
 
@@ -846,7 +1117,7 @@ elif st.session_state.user_role == "admin":
                             c.execute("INSERT OR REPLACE INTO clientes (id_cliente, nombre, telefono, correo) VALUES (?, ?, ?, ?)", (nuevo_id, nombre_clean, tel, correo))
                         
                             if "EMP" in tipo_registro:
-                                caja_clean = nombre_caja_in.strip().capitalize() if nombre_caja_in else "Caja Asignada"
+                                caja_clean = nombre_caja_in or "Caja Asignada"
                                 c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)", (nuevo_id, caja_clean, precio_caja_in))
 
                             conn.commit()
@@ -912,19 +1183,13 @@ elif st.session_state.user_role == "admin":
                                 st.write("")
                                 with card("sub"):
                                     st.markdown(f"💼 **Configuración de Caja de Emprendedor:**")
-                                    col_cj1, col_cj2, col_cj3 = st.columns([2, 2, 1])
-                                    with col_cj1:
-                                        edit_nombre_caja = st.text_input("Nombre de Caja", value=caja_nombre_exp or "Caja #01", key=f"exp_cj_nom_{id_cli_exp}")
-                                    with col_cj2:
-                                        edit_precio_caja = st.number_input("Precio de Caja (₡)", value=float(caja_precio_exp), step=1000.0, key=f"exp_cj_pre_{id_cli_exp}")
-                                    with col_cj3:
-                                        st.write("")
-                                        if st.button("💾 Actualizar Caja", key=f"btn_update_cj_{id_cli_exp}"):
-                                            c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)",
-                                                      (id_cli_exp, edit_nombre_caja.strip().capitalize(), edit_precio_caja))
-                                            conn.commit()
-                                            st.success("¡Caja actualizada!")
-                                            st.rerun()
+                                    edit_nombre_caja, edit_precio_caja = selector_talla_caja(f"exp_cj_{id_cli_exp}", caja_nombre_exp)
+                                    if st.button("💾 Actualizar Caja", key=f"btn_update_cj_{id_cli_exp}"):
+                                        c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)",
+                                                  (id_cli_exp, edit_nombre_caja, edit_precio_caja))
+                                        conn.commit()
+                                        st.success("¡Caja actualizada!")
+                                        st.rerun()
 
                             st.write("")
                             path_fac, link_wa = generar_factura_imagen(id_cli_exp)
@@ -1379,7 +1644,12 @@ elif st.session_state.user_role == "admin":
             
             with card():
                 st.markdown("<h4 style='color:#be185d;'>➕ Añadir Nuevo Producto al Inventario</h4>", unsafe_allow_html=True)
-            
+
+                # El escáner va fuera del formulario porque necesita recargar la página al instante
+                escanear_codigo_barras("new_stock", label="📷 Escanear código de barras con la cámara (opcional)")
+                if "codigo_new_stock" not in st.session_state:
+                    st.session_state["codigo_new_stock"] = ""
+
                 with st.form("form_agregar_stock", clear_on_submit=True):
                     col_i1, col_i2 = st.columns(2)
                     with col_i1:
@@ -1389,18 +1659,19 @@ elif st.session_state.user_role == "admin":
                     with col_i2:
                         new_tienda = st.text_input("Tienda / Proveedor", placeholder="Ej. Zara o Local")
                         new_cat = st.text_input("Categoría", placeholder="Ej. Ropa")
-                        new_barcode = st.text_input("Código de Barras (Opcional)", placeholder="Escanea o escribe el código")
-                
+                        new_barcode = st.text_input("Código de Barras (Opcional)", placeholder="Escanea con la cámara o escribe el código", key="codigo_new_stock")
+
                     new_obs = st.text_area("Observaciones", placeholder="Detalles adicionales...", height=60)
-                
+
                     btn_add_stock = st.form_submit_button("💾 Guardar Producto en Inventario")
-                
+
                     if btn_add_stock:
                         if new_desc.strip():
                             c.execute("""INSERT INTO productos (id_cliente, tienda, categoria, descripcion, precio, moneda, cantidad, estado, observaciones, codigo_barras)
                                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                                       (None, new_tienda.strip().capitalize(), new_cat.strip().capitalize(), new_desc.strip().capitalize(), new_precio, "CRC", new_cant, "Disponible en Inventario", new_obs.strip().capitalize() if new_obs else "", new_barcode.strip() if new_barcode else ""))
                             conn.commit()
+                            st.session_state["codigo_new_stock"] = ""
                             st.success(f"¡Producto '{new_desc}' añadido al inventario exitosamente!")
                             st.rerun()
                         else:
@@ -1421,6 +1692,14 @@ elif st.session_state.user_role == "admin":
                     c.execute("SELECT descripcion, tienda, categoria, precio, cantidad, codigo_barras FROM productos WHERE id = ?", (id_prod_edit,))
                     p_edit_data = c.fetchone()
                     if p_edit_data:
+                        # Si aún no se ha escaneado nada para este producto, se parte del valor guardado en la BD
+                        clave_barcode_edit = f"inv_ed_bar_{id_prod_edit}"
+                        escanear_codigo_barras(f"edit_stock_{id_prod_edit}", label="📷 Escanear nuevo código de barras con la cámara (opcional)")
+                        if clave_barcode_edit not in st.session_state:
+                            st.session_state[clave_barcode_edit] = p_edit_data[5] or ""
+                        if st.session_state.get(f"codigo_edit_stock_{id_prod_edit}"):
+                            st.session_state[clave_barcode_edit] = st.session_state.pop(f"codigo_edit_stock_{id_prod_edit}")
+
                         c_e1, c_e2 = st.columns(2)
                         with c_e1:
                             n_desc = st.text_input("Descripción", value=p_edit_data[0] or "", key="inv_ed_desc")
@@ -1429,7 +1708,7 @@ elif st.session_state.user_role == "admin":
                         with c_e2:
                             n_tienda = st.text_input("Tienda", value=p_edit_data[1] if p_edit_data[1] else "", key="inv_ed_tie")
                             n_cat = st.text_input("Categoría", value=p_edit_data[2] if p_edit_data[2] else "", key="inv_ed_cat")
-                            n_barcode = st.text_input("Código de Barras", value=p_edit_data[5] if p_edit_data[5] else "", key="inv_ed_bar")
+                            n_barcode = st.text_input("Código de Barras", key=clave_barcode_edit)
 
                         c_b1, c_b2 = st.columns(2)
                         with c_b1:

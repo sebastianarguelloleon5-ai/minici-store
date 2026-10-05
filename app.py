@@ -8,7 +8,13 @@ import pandas as pd
 from PIL import Image, ImageDraw, ImageFont, ImageChops
 import streamlit as st
 import urllib.parse
+import urllib.request
+import urllib.error
 import html
+import json
+import zipfile
+import tempfile
+import base64
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -34,9 +40,126 @@ st.set_page_config(
 )
 
 # -------------------------------------------------------------
+# 1B. CONFIGURACIÓN SEGURA Y RESPALDOS EN GITHUB
+# -------------------------------------------------------------
+DB_FILE = "minici_store.db"
+GH_RUTA_ZIP = "respaldos/respaldo_completo.zip"
+GH_RUTA_DB = "respaldos/minici_store.db"
+
+
+def _secret(nombre, default=None):
+    """Lee un valor de los 'Secrets' de Streamlit sin romper si no existen."""
+    try:
+        valor = st.secrets[nombre]
+        return valor if valor not in (None, "") else default
+    except Exception:
+        return default
+
+
+def _gh_config():
+    token, repo = _secret("GITHUB_TOKEN"), _secret("GITHUB_REPO")
+    if not token or not repo:
+        return None
+    return {"token": str(token).strip(),
+            "repo": str(repo).strip().strip("/"),
+            "branch": str(_secret("GITHUB_BRANCH", "main")).strip()}
+
+
+def _gh_request(method, url, token, payload=None, raw=False):
+    cuerpo = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(url, data=cuerpo, method=method)
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Accept", "application/vnd.github.raw+json" if raw else "application/vnd.github+json")
+    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+    req.add_header("User-Agent", "minici-store-respaldo")
+    if cuerpo is not None:
+        req.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.read()
+
+
+def _gh_mensaje_error(e):
+    if isinstance(e, urllib.error.HTTPError):
+        if e.code == 401:
+            return "GitHub rechazó el token (401). Revisa que GITHUB_TOKEN sea correcto y no haya vencido."
+        if e.code == 403:
+            return "GitHub negó el permiso (403). El token necesita 'Contents: Read and write' sobre el repositorio."
+        if e.code == 404:
+            return "GitHub no encontró el repositorio o la rama (404). Revisa GITHUB_REPO (usuario/repositorio) y GITHUB_BRANCH."
+        return f"GitHub respondió con el error {e.code}."
+    return f"No se pudo conectar con GitHub: {e}"
+
+
+def github_subir(ruta_repo, contenido, mensaje):
+    """Crea o actualiza un archivo en el repositorio de respaldos. Devuelve (ok, texto)."""
+    cfg = _gh_config()
+    if not cfg:
+        return False, "GitHub no está configurado."
+    url = f"https://api.github.com/repos/{cfg['repo']}/contents/{urllib.parse.quote(ruta_repo)}"
+    try:
+        sha = None
+        try:
+            info = json.loads(_gh_request("GET", f"{url}?ref={urllib.parse.quote(cfg['branch'])}", cfg["token"]))
+            sha = info.get("sha")
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+        payload = {"message": mensaje, "branch": cfg["branch"],
+                   "content": base64.b64encode(contenido).decode("ascii")}
+        if sha:
+            payload["sha"] = sha
+        _gh_request("PUT", url, cfg["token"], payload)
+        return True, "ok"
+    except Exception as e:
+        return False, _gh_mensaje_error(e)
+
+
+def github_leer(ruta_repo):
+    cfg = _gh_config()
+    url = f"https://api.github.com/repos/{cfg['repo']}/contents/{urllib.parse.quote(ruta_repo)}?ref={urllib.parse.quote(cfg['branch'])}"
+    return _gh_request("GET", url, cfg["token"], raw=True)
+
+
+def _extraer_fotos_zip(z):
+    """Extrae solo las fotos de productos de un respaldo (sin rutas peligrosas)."""
+    for nombre in z.namelist():
+        if nombre.startswith("fotos_productos/") and not nombre.endswith("/") and ".." not in nombre:
+            destino = os.path.join("fotos_productos", os.path.basename(nombre))
+            os.makedirs("fotos_productos", exist_ok=True)
+            with open(destino, "wb") as f:
+                f.write(z.read(nombre))
+
+
+def _restaurar_al_iniciar():
+    """Si el servidor se reinició y la base de datos desapareció, la recupera del último respaldo en GitHub."""
+    if os.path.exists(DB_FILE) or not _gh_config():
+        return False
+    try:
+        datos = github_leer(GH_RUTA_ZIP)
+        with zipfile.ZipFile(io.BytesIO(datos)) as z:
+            if DB_FILE in z.namelist():
+                with open(DB_FILE, "wb") as f:
+                    f.write(z.read(DB_FILE))
+                _extraer_fotos_zip(z)
+                return True
+    except Exception:
+        pass
+    try:
+        datos = github_leer(GH_RUTA_DB)
+        with open(DB_FILE, "wb") as f:
+            f.write(datos)
+        return True
+    except Exception:
+        return False
+
+
+if _restaurar_al_iniciar():
+    st.session_state["_restaurado_gh"] = True
+
+# -------------------------------------------------------------
 # 2. BASE DE DATOS SQLITE Y MIGRACIONES AUTOMÁTICAS
 # -------------------------------------------------------------
-conn = sqlite3.connect("minici_store.db", check_same_thread=False)
+conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 c = conn.cursor()
 
 c.execute("""CREATE TABLE IF NOT EXISTS clientes (
@@ -122,6 +245,118 @@ if not os.path.exists("fotos_productos"):
     os.makedirs("fotos_productos")
 if not os.path.exists("facturas_generadas"):
     os.makedirs("facturas_generadas")
+
+# -------------------------------------------------------------
+# UTILIDADES: TEXTO, MENSAJES Y RESPALDO / RESTAURACIÓN
+# -------------------------------------------------------------
+def cap1(texto):
+    """Pone en mayúscula solo la primera letra (sin borrar mayúsculas como en 'Nike Air' o 'MAC')."""
+    t = str(texto or "").strip()
+    return t[:1].upper() + t[1:]
+
+
+def flash(tipo, mensaje):
+    """Guarda un mensaje para mostrarlo después de st.rerun() (si no, se pierde)."""
+    st.session_state["_flash"] = (tipo, mensaje)
+
+
+def mostrar_flash():
+    f = st.session_state.pop("_flash", None)
+    if f:
+        getattr(st, f[0], st.info)(f[1])
+
+
+def crear_respaldo_zip():
+    """Zip con la base de datos, todas las fotos y un Excel legible. Devuelve (zip, db)."""
+    conn.commit()
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    try:
+        destino = sqlite3.connect(tmp.name)
+        conn.backup(destino)
+        destino.close()
+        with open(tmp.name, "rb") as f:
+            db_bytes = f.read()
+    finally:
+        os.unlink(tmp.name)
+
+    xlsx_bytes = None
+    try:
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as w:
+            for tabla, hoja in [("clientes", "Clientes"), ("cajas_emprendedores", "Cajas"),
+                                ("productos", "Productos"), ("abonos", "Abonos"),
+                                ("gastos", "Gastos"), ("ventas_rapidas", "Ventas POS"),
+                                ("notificaciones", "Notificaciones")]:
+                pd.read_sql(f"SELECT * FROM {tabla}", conn).to_excel(w, sheet_name=hoja, index=False)
+        xlsx_bytes = buf.getvalue()
+    except Exception:
+        pass
+
+    zbuf = io.BytesIO()
+    with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(DB_FILE, db_bytes)
+        if xlsx_bytes:
+            z.writestr("datos_minici.xlsx", xlsx_bytes)
+        if os.path.isdir("fotos_productos"):
+            for nombre in os.listdir("fotos_productos"):
+                ruta = os.path.join("fotos_productos", nombre)
+                if os.path.isfile(ruta):
+                    z.write(ruta, f"fotos_productos/{nombre}")
+    return zbuf.getvalue(), db_bytes
+
+
+def hacer_respaldo():
+    zip_bytes, db_bytes = crear_respaldo_zip()
+    ahora = datetime.now()
+    res = {"zip": zip_bytes, "nombre": f"respaldo_minici_{ahora:%Y-%m-%d_%H%M}.zip",
+           "hora": ahora.strftime("%d/%m/%Y %H:%M"), "github": None, "detalle": ""}
+    if _gh_config():
+        msg = f"Respaldo Minici Store {ahora:%Y-%m-%d %H:%M}"
+        ok_db, m_db = github_subir(GH_RUTA_DB, db_bytes, msg)
+        if len(zip_bytes) < 90 * 1024 * 1024:
+            ok_zip, m_zip = github_subir(GH_RUTA_ZIP, zip_bytes, msg)
+        else:
+            ok_zip, m_zip = False, "El respaldo con fotos pesa más de 90 MB; solo se subió la base de datos."
+        res["github"] = bool(ok_db and ok_zip)
+        res["detalle"] = "" if res["github"] else (m_db if not ok_db else m_zip)
+    return res
+
+
+def restaurar_respaldo(datos):
+    """Reemplaza los datos actuales con los de un respaldo (.zip o .db). Devuelve (ok, texto)."""
+    conn.commit()
+    zf = None
+    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp.close()
+    try:
+        if zipfile.is_zipfile(io.BytesIO(datos)):
+            zf = zipfile.ZipFile(io.BytesIO(datos))
+            if DB_FILE not in zf.namelist():
+                return False, f"El .zip no contiene {DB_FILE}."
+            contenido_db = zf.read(DB_FILE)
+        else:
+            contenido_db = datos
+        with open(tmp.name, "wb") as f:
+            f.write(contenido_db)
+        origen = sqlite3.connect(tmp.name)
+        try:
+            tablas = [r[0] for r in origen.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+            if "clientes" not in tablas or "productos" not in tablas:
+                return False, "Ese archivo no parece un respaldo de Minici Store."
+            if origen.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
+                return False, "El archivo de respaldo está dañado."
+            origen.backup(conn)
+        finally:
+            origen.close()
+        if zf:
+            _extraer_fotos_zip(zf)
+        return True, "Datos restaurados correctamente."
+    except Exception as e:
+        return False, f"No se pudo restaurar: {e}"
+    finally:
+        os.unlink(tmp.name)
+
 
 # -------------------------------------------------------------
 # FACTURAS: IMAGEN + MENSAJE DE WHATSAPP
@@ -400,6 +635,25 @@ def generar_factura_imagen(id_cliente):
     T(W / 2, footer_top + 28, "¡Gracias por tu preferencia en Minici Store!", F(True, 25), K["plum"], "c")
     T(W / 2, footer_top + 72, "P E R S O N A L   S H O P P E R", F(False, 15), K["muted"], "c")
 
+    # ---------- Logo como marca de agua de fondo ----------
+    if logo is not None:
+        try:
+            body_top, body_bot = (header_h + 6) * S, footer_top * S
+            wm_w = int(W * 0.66 * S)
+            wm_h = int(logo.height * wm_w / logo.width)
+            max_h = int((body_bot - body_top) * 0.88)
+            if wm_h > max_h:
+                wm_h = max_h
+                wm_w = int(logo.width * wm_h / logo.height)
+            wm = logo.resize((wm_w, wm_h), Image.LANCZOS)
+            diff = ImageChops.difference(wm, Image.new("RGB", wm.size, bg_logo)).convert("L")
+            mask = diff.point(lambda v: int(min(255, v * 4) * 0.10))
+            capa = Image.new("RGB", img.size, "#FFFFFF")
+            capa.paste(wm, ((img.width - wm_w) // 2, body_top + ((body_bot - body_top) - wm_h) // 2), mask)
+            img = ImageChops.multiply(img, capa)
+        except Exception:
+            pass
+
     img = img.resize((W, H), Image.LANCZOS)
     os.makedirs("facturas_generadas", exist_ok=True)
     filepath = os.path.join("facturas_generadas", f"factura_{id_cliente}.jpg")
@@ -415,58 +669,281 @@ def generar_factura_imagen(id_cliente):
 
     return filepath, link
 
+_HTML_ESCANER = r'''<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { margin: 0; padding: 2px; font-family: 'DM Sans', system-ui, -apple-system, sans-serif; color: #4a2c3b; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button, label.btn {
+    background: #BE185D; color: #fff; border: 1.5px solid #BE185D; border-radius: 999px;
+    padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
+  }
+  button.sec, label.btn.sec { background: #fff; color: #BE185D; border-color: #F3B2C9; }
+  #wrap { display: none; margin-top: 10px; }
+  #vbox { position: relative; max-width: 460px; overflow: hidden; border-radius: 14px; background: #000; }
+  video { width: 100%; display: block; }
+  .guide { position: absolute; left: 10%; top: 28%; width: 80%; height: 44%;
+           border: 2px solid #F3B2C9; border-radius: 10px; box-shadow: 0 0 0 999px rgba(0,0,0,.30);
+           pointer-events: none; }
+  #msg { font-size: 13px; margin-top: 8px; color: #7C6572; min-height: 18px; }
+  #msg.ok { color: #059669; font-weight: 600; }
+  #msg.err { color: #B91C1C; }
+</style>
+</head>
+<body>
+<div class="row">
+  <button id="btnCam">📷 Abrir cámara y escanear</button>
+  <label class="btn sec">🖼️ Tomar foto del código
+    <input id="foto" type="file" accept="image/*" capture="environment" style="display:none">
+  </label>
+</div>
+<div id="wrap">
+  <div id="vbox"><video id="v" playsinline muted autoplay></video><div class="guide"></div></div>
+  <div class="row" style="margin-top:8px"><button class="sec" id="btnStop">Cerrar cámara</button></div>
+</div>
+<div id="msg"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const video = $("v"), wrap = $("wrap"), msg = $("msg");
+let stream = null, running = false, timer = null, nativeDet = null;
+
+function post(type, data) {
+  window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data || {}), "*");
+}
+function fit() { post("streamlit:setFrameHeight", { height: Math.ceil(document.documentElement.scrollHeight) + 6 }); }
+function emit(code) { post("streamlit:setComponentValue", { value: { code: String(code), ts: Date.now() }, dataType: "json" }); }
+function say(t, cls) { msg.textContent = t; msg.className = cls || ""; fit(); }
+
+window.addEventListener("message", () => {});
+post("streamlit:componentReady", { apiVersion: 1 });
+new ResizeObserver(fit).observe(document.body);
+setTimeout(fit, 50);
+
+const NATIVE_FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128", "code_39", "code_93", "itf", "codabar", "qr_code"];
+
+async function getNative() {
+  if (!("BarcodeDetector" in window)) return null;
+  try {
+    const sup = await BarcodeDetector.getSupportedFormats();
+    const f = NATIVE_FORMATS.filter((x) => sup.includes(x));
+    return f.length ? new BarcodeDetector({ formats: f }) : null;
+  } catch (e) { return null; }
+}
+
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = src; s.onload = res; s.onerror = () => rej(new Error("no cargó " + src));
+    document.head.appendChild(s);
+  });
+}
+async function ensureZXing() {
+  if (window.ZXing) return;
+  try { await loadScript("https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"); }
+  catch (e) { await loadScript("https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"); }
+}
+function makeReader() {
+  const Z = window.ZXing;
+  const F = Z.BarcodeFormat;
+  const hints = new Map();
+  hints.set(Z.DecodeHintType.POSSIBLE_FORMATS,
+    [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39, F.CODE_93, F.ITF, F.CODABAR, F.QR_CODE]);
+  hints.set(Z.DecodeHintType.TRY_HARDER, true);
+  const r = new Z.MultiFormatReader();
+  r.setHints(hints);
+  return r;
+}
+function zxingDecodeCanvas(reader, canvas) {
+  const Z = window.ZXing;
+  const lum = new Z.HTMLCanvasElementLuminanceSource(canvas);
+  const bmp = new Z.BinaryBitmap(new Z.HybridBinarizer(lum));
+  return reader.decode(bmp).getText();
+}
+
+function stopCam() {
+  running = false;
+  if (timer) { clearTimeout(timer); timer = null; }
+  if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+  video.srcObject = null;
+  wrap.style.display = "none";
+  fit();
+}
+
+function found(code) {
+  stopCam();
+  try { if (navigator.vibrate) navigator.vibrate(150); } catch (e) {}
+  say("✅ Código detectado: " + code, "ok");
+  emit(code);
+}
+
+function loopNative() {
+  const tick = async () => {
+    if (!running) return;
+    try {
+      const r = await nativeDet.detect(video);
+      if (r && r.length) { found(r[0].rawValue); return; }
+    } catch (e) {}
+    timer = setTimeout(tick, 120);
+  };
+  tick();
+}
+
+function loopZXing() {
+  const reader = makeReader();
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  let n = 0;
+  const tick = () => {
+    if (!running) return;
+    if (video.readyState >= 2 && video.videoWidth) {
+      const vw = video.videoWidth, vh = video.videoHeight;
+      // alterna entre la franja central y el cuadro completo
+      const full = (n++ % 3 === 2);
+      const cw = Math.floor(vw * (full ? 1 : 0.8)), ch = Math.floor(vh * (full ? 1 : 0.44));
+      const sx = Math.floor((vw - cw) / 2), sy = Math.floor((vh - ch) / 2);
+      canvas.width = cw; canvas.height = ch;
+      ctx.drawImage(video, sx, sy, cw, ch, 0, 0, cw, ch);
+      try { const t = zxingDecodeCanvas(reader, canvas); if (t) { found(t); return; } } catch (e) {}
+    }
+    timer = setTimeout(tick, 100);
+  };
+  tick();
+}
+
+async function startCam() {
+  if (running) return;
+  say("Abriendo cámara…");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    say("⚠️ Esta página no puede usar la cámara en vivo (se necesita conexión https). Usa «Tomar foto del código».", "err");
+    return;
+  }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false
+    });
+  } catch (e) {
+    say("⚠️ No se pudo abrir la cámara (" + (e.name || e) + "). Revisa el permiso del navegador o usa «Tomar foto del código».", "err");
+    return;
+  }
+  try {
+    const tr = stream.getVideoTracks()[0];
+    const caps = tr.getCapabilities ? tr.getCapabilities() : {};
+    if (caps.focusMode && caps.focusMode.includes("continuous")) {
+      await tr.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+    }
+  } catch (e) {}
+  video.srcObject = stream;
+  try { await video.play(); } catch (e) {}
+  wrap.style.display = "block";
+  fit();
+  running = true;
+  nativeDet = await getNative();
+  if (nativeDet) {
+    say("Apunta al código de barras y mantenlo quieto…");
+    loopNative();
+  } else {
+    say("Cargando lector…");
+    try { await ensureZXing(); }
+    catch (e) { stopCam(); say("⚠️ No se pudo cargar el lector (revisa tu internet). Usa «Tomar foto del código».", "err"); return; }
+    say("Apunta al código de barras y mantenlo quieto…");
+    loopZXing();
+  }
+}
+
+async function decodeFile(file) {
+  const url = URL.createObjectURL(file);
+  const img = await new Promise((res, rej) => {
+    const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url;
+  });
+  const det = await getNative();
+  if (det) {
+    try { const r = await det.detect(img); if (r && r.length) return r[0].rawValue; } catch (e) {}
+  }
+  await ensureZXing();
+  const reader = makeReader();
+  const scale = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+  const w = Math.max(1, Math.round(img.naturalWidth * scale)), h = Math.max(1, Math.round(img.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  const intentos = [[0, 0, 1, 1], [0, 0.25, 1, 0.5], [0.1, 0.1, 0.8, 0.8]];
+  for (const [fx, fy, fw, fh] of intentos) {
+    canvas.width = Math.round(w * fw); canvas.height = Math.round(h * fh);
+    ctx.drawImage(img, fx * img.naturalWidth, fy * img.naturalHeight, fw * img.naturalWidth, fh * img.naturalHeight,
+                  0, 0, canvas.width, canvas.height);
+    try { const t = zxingDecodeCanvas(reader, canvas); if (t) return t; } catch (e) {}
+  }
+  return null;
+}
+
+$("btnCam").addEventListener("click", startCam);
+$("btnStop").addEventListener("click", () => { stopCam(); say(""); });
+$("foto").addEventListener("change", async (ev) => {
+  const f = ev.target.files && ev.target.files[0];
+  if (!f) return;
+  say("Leyendo la foto…");
+  try {
+    const code = await decodeFile(f);
+    if (code) found(code);
+    else say("⚠️ No se detectó ningún código en la foto. Acércate más, con buena luz y bien enfocado.", "err");
+  } catch (e) {
+    say("⚠️ No se pudo leer la foto (" + (e.message || e) + ").", "err");
+  }
+  ev.target.value = "";
+});
+window.addEventListener("pagehide", stopCam);
+</script>
+</body>
+</html>
+'''
+
+
+def _declarar_componente_escaner():
+    """Crea (si hace falta) la carpeta del componente de cámara y lo registra en Streamlit."""
+    try:
+        import streamlit.components.v1 as components
+        carpeta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "componente_escaner")
+        os.makedirs(carpeta, exist_ok=True)
+        ruta = os.path.join(carpeta, "index.html")
+        try:
+            with open(ruta, encoding="utf-8") as f:
+                actual = f.read()
+        except Exception:
+            actual = None
+        if actual != _HTML_ESCANER:
+            with open(ruta, "w", encoding="utf-8") as f:
+                f.write(_HTML_ESCANER)
+        return components.declare_component("minici_barcode_scanner", path=carpeta)
+    except Exception:
+        return None
+
+
+_scanner_component = _declarar_componente_escaner()
+
+
 def escanear_codigo_barras(key_suffix, label="📷 Escanear código de barras con la cámara"):
     """
-    Muestra un botón que abre la cámara (celular o computadora) y lee un
-    código de barras con la librería html5-qrcode. El valor leído se guarda
-    en st.session_state[f"codigo_{key_suffix}"] y la página se recarga sola.
-    Si el equipo tiene un lector físico USB/Bluetooth, no hace falta esto:
-    esos lectores escriben directo en el campo de texto como si fuera un teclado.
+    Botón de cámara para leer un código de barras (celular o computadora).
+    El código leído se guarda en st.session_state[f"codigo_{key_suffix}"] y el campo
+    de texto con esa misma clave se llena solo, SIN recargar la página.
+    Los lectores físicos USB/Bluetooth no necesitan esto: escriben directo en el campo.
     """
-    import streamlit.components.v1 as components
-
-    query_key = f"scan_{key_suffix}"
-    valor_leido = st.query_params.get(query_key)
-    if valor_leido:
-        st.session_state[f"codigo_{key_suffix}"] = valor_leido
-        del st.query_params[query_key]
-        st.toast(f"✅ Código escaneado: {valor_leido}")
-
+    res = None
     with st.expander(label):
-        components.html(
-            f"""
-            <div style="font-family:'DM Sans',sans-serif;">
-              <div id="reader-{key_suffix}" style="width:100%; max-width:420px;"></div>
-              <p id="status-{key_suffix}" style="color:#7C6572; font-size:13px; margin-top:6px;">
-                Presiona permitir para activar la cámara y apunta al código de barras.
-              </p>
-            </div>
-            <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
-            <script>
-              const statusEl_{key_suffix} = document.getElementById("status-{key_suffix}");
-              function onScan_{key_suffix}(decodedText) {{
-                  statusEl_{key_suffix}.innerText = "✅ Código detectado: " + decodedText;
-                  const url = new URL(window.parent.location.href);
-                  url.searchParams.set("{query_key}", decodedText);
-                  window.parent.location.href = url.toString();
-              }}
-              const scanner_{key_suffix} = new Html5Qrcode("reader-{key_suffix}");
-              Html5Qrcode.getCameras().then(cams => {{
-                  if (cams && cams.length) {{
-                      const camId = cams.length > 1 ? cams[cams.length - 1].id : cams[0].id;
-                      scanner_{key_suffix}.start(
-                          camId,
-                          {{ fps: 10, qrbox: {{ width: 260, height: 140 }} }},
-                          onScan_{key_suffix}
-                      ).catch(err => {{ statusEl_{key_suffix}.innerText = "⚠️ No se pudo abrir la cámara: " + err; }});
-                  }} else {{
-                      statusEl_{key_suffix}.innerText = "⚠️ No se encontró ninguna cámara disponible.";
-                  }}
-              }}).catch(err => {{ statusEl_{key_suffix}.innerText = "⚠️ Sin acceso a cámaras: " + err; }});
-            </script>
-            """,
-            height=320,
-        )
+        if _scanner_component is None:
+            st.warning("No se pudo preparar el escáner. Escribe el código a mano.")
+        else:
+            res = _scanner_component(key=f"scanner_{key_suffix}", default=None)
+    if isinstance(res, dict) and res.get("code"):
+        ts = res.get("ts")
+        if st.session_state.get(f"scan_ts_{key_suffix}") != ts:
+            st.session_state[f"scan_ts_{key_suffix}"] = ts
+            st.session_state[f"codigo_{key_suffix}"] = str(res["code"]).strip()
+            st.toast(f"✅ Código escaneado: {res['code']}")
 
 
 # ==========================================
@@ -911,7 +1388,7 @@ if st.session_state.user_role is None:
         if st.button("🚀 Ingresar al Sistema", key="btn_login"):
             codigo_limpio = codigo_ingresado.strip().upper()
         
-            if codigo_limpio == "KENDRA5412":
+            if codigo_limpio == str(_secret("ADMIN_CODE", "KENDRA5412")).strip().upper():
                 st.session_state.user_role = "admin"
                 st.rerun()
             else:
@@ -928,16 +1405,68 @@ if st.session_state.user_role is None:
 # 5. PANEL DE ADMINISTRADOR
 # -------------------------------------------------------------
 elif st.session_state.user_role == "admin":
-    col_a, col_b = st.columns([4, 1])
+    col_a, col_save, col_b = st.columns([3, 1.5, 1])
     with col_a:
         st.markdown(
             '<div class="app-header"><span class="app-brand">Minici Store</span><span class="app-role">Panel administrador</span></div>',
             unsafe_allow_html=True,
         )
+    with col_save:
+        if st.button("💾 Guardar datos", key="btn_respaldo"):
+            with st.spinner("Guardando todos los datos..."):
+                try:
+                    st.session_state["_respaldo"] = hacer_respaldo()
+                except Exception as e:
+                    st.session_state["_respaldo"] = {"error": str(e)}
     with col_b:
         if st.button("🚪 Salir", key="btn_salir_admin"):
             st.session_state.user_role = None
             st.rerun()
+
+    mostrar_flash()
+    if st.session_state.pop("_restaurado_gh", False):
+        st.info("♻️ El servidor se había reiniciado: tus datos se recuperaron automáticamente del último respaldo de GitHub.")
+
+    _rsp = st.session_state.get("_respaldo")
+    if _rsp:
+        if _rsp.get("error"):
+            st.error(f"No se pudo crear el respaldo: {_rsp['error']}")
+        else:
+            if _rsp["github"] is True:
+                st.success(f"✅ Todos los datos quedaron guardados en GitHub ({_rsp['hora']}).")
+            elif _rsp["github"] is False:
+                st.warning(f"⚠️ El respaldo se creó pero NO se pudo subir a GitHub: {_rsp['detalle']}")
+            else:
+                st.info(f"💾 Respaldo creado ({_rsp['hora']}). Descárgalo abajo. Para que también se guarde solo en GitHub, abre «Respaldos y GitHub».")
+            st.download_button("⬇️ Descargar respaldo (datos + fotos + Excel)", data=_rsp["zip"],
+                               file_name=_rsp["nombre"], mime="application/zip", key="dl_respaldo")
+
+    with st.expander("⚙️ Respaldos y GitHub (configurar / restaurar)"):
+        if _gh_config():
+            _cfg = _gh_config()
+            st.success(f"GitHub conectado: {_cfg['repo']} (rama {_cfg['branch']}). Si el servidor se reinicia, los datos se recuperan solos.")
+        else:
+            st.markdown(
+                "**Para guardar los datos en GitHub automáticamente:**\n"
+                "1. Crea un repositorio **privado** nuevo solo para respaldos (por ejemplo `minici-respaldos`). "
+                "Debe ser privado porque contiene nombres y teléfonos de clientas, y distinto al repositorio de la app: "
+                "si guardas en el repositorio de la app, cada respaldo reinicia la aplicación.\n"
+                "2. En GitHub: *Settings → Developer settings → Fine-grained tokens* → crea un token con acceso solo a ese repositorio "
+                "y el permiso **Contents: Read and write**.\n"
+                "3. En Streamlit Cloud: *Manage app → Settings → Secrets* y pega:"
+            )
+            st.code('GITHUB_TOKEN = "github_pat_xxxxxxxx"\nGITHUB_REPO = "tu-usuario/minici-respaldos"\nGITHUB_BRANCH = "main"', language="toml")
+        st.divider()
+        st.markdown("**♻️ Restaurar un respaldo** (reemplaza todos los datos actuales)")
+        _arch = st.file_uploader("Sube un respaldo .zip (o la base .db)", type=["zip", "db"], key="up_restaurar")
+        _ok = st.checkbox("Entiendo que esto reemplaza los clientes, pedidos y abonos actuales", key="chk_restaurar")
+        if st.button("♻️ Restaurar ahora", key="btn_restaurar", disabled=not (_arch and _ok)):
+            _ok_r, _txt_r = restaurar_respaldo(_arch.getvalue())
+            if _ok_r:
+                flash("success", "✅ " + _txt_r)
+                st.rerun()
+            else:
+                st.error(_txt_r)
 
     seccion_admin = st.radio(
         "Módulo General",
@@ -1035,10 +1564,10 @@ elif st.session_state.user_role == "admin":
                         if not producto or not tienda or not categoria:
                             st.error("Debes completar el producto, la tienda y la categoría.")
                         else:
-                            prod_clean = producto.strip().capitalize()
-                            tienda_clean = tienda.strip().capitalize()
-                            cat_clean = categoria.strip().capitalize()
-                            obs_clean = observaciones.strip().capitalize() if observaciones else ""
+                            prod_clean = cap1(producto)
+                            tienda_clean = cap1(tienda)
+                            cat_clean = cap1(categoria)
+                            obs_clean = cap1(observaciones) if observaciones else ""
 
                             foto_filename = ""
                             if foto_file:
@@ -1121,7 +1650,7 @@ elif st.session_state.user_role == "admin":
                                 c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)", (nuevo_id, caja_clean, precio_caja_in))
 
                             conn.commit()
-                            st.success(f"¡Registro de {nombre_clean} guardado exitosamente ({nuevo_id})!")
+                            flash("success", f"¡Registro de {nombre_clean} guardado exitosamente ({nuevo_id})!")
                             st.rerun()
                         else:
                             st.error("Debes ingresar el nombre del cliente.")
@@ -1188,7 +1717,7 @@ elif st.session_state.user_role == "admin":
                                         c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)",
                                                   (id_cli_exp, edit_nombre_caja, edit_precio_caja))
                                         conn.commit()
-                                        st.success("¡Caja actualizada!")
+                                        flash("success", "¡Caja actualizada!")
                                         st.rerun()
 
                             st.write("")
@@ -1275,7 +1804,7 @@ elif st.session_state.user_role == "admin":
                             columns={"id": "N.º", "tienda": "Tienda", "descripcion": "Producto", "cantidad": "Cant.", "precio": "Precio (₡)", "estado": "Estado"})
                         evento_ped = st.dataframe(
                             tabla_pedidos, hide_index=True, on_select="rerun", selection_mode="single-row",
-                            key=f"gestor_tabla_{id_cli_gest}", use_container_width=True)
+                            key=f"gestor_tabla_{id_cli_gest}")
 
                         filas_sel = []
                         sel_obj = getattr(evento_ped, "selection", None)
@@ -1348,7 +1877,7 @@ elif st.session_state.user_role == "admin":
                                     UPDATE productos
                                     SET tienda = ?, categoria = ?, descripcion = ?, cantidad = ?, precio = ?, estado = ?
                                     WHERE id = ?
-                                """, (nueva_tienda.strip().capitalize(), nueva_categoria.strip().capitalize(), nueva_descripcion.strip().capitalize(), nueva_cantidad, nuevo_precio, nuevo_estado, id_pedido_actual))
+                                """, (cap1(nueva_tienda), cap1(nueva_categoria), cap1(nueva_descripcion), nueva_cantidad, nuevo_precio, nuevo_estado, id_pedido_actual))
                                 conn.commit()
                                 st.session_state.gestor_msg = f"¡Pedido #{id_pedido_actual} actualizado exitosamente!"
                                 st.session_state.gestor_cargado_id = None
@@ -1404,7 +1933,7 @@ elif st.session_state.user_role == "admin":
                 st.markdown("<h4 style='color:#be185d;'>📋 Historial de Abonos Recibidos</h4>", unsafe_allow_html=True)
                 abonos_detalle = pd.read_sql("SELECT a.fecha as Fecha, c.id_cliente as Código, c.nombre as Cliente, a.monto_crc as 'Monto Abonado (₡)' FROM abonos a JOIN clientes c ON a.id_cliente = c.id_cliente ORDER BY a.id DESC", conn)
                 if not abonos_detalle.empty:
-                    st.dataframe(abonos_detalle, use_container_width=True)
+                    st.dataframe(abonos_detalle)
                 else:
                     st.info("No hay abonos registrados en el sistema.")
 
@@ -1433,7 +1962,7 @@ elif st.session_state.user_role == "admin":
                     if btn_save_gasto:
                         if concepto and monto_gasto > 0:
                             c.execute("INSERT INTO gastos (concepto, categoria, monto_crc, fecha, observaciones) VALUES (?, ?, ?, ?, ?)",
-                                      (concepto.strip().capitalize(), cat_gasto, monto_gasto, datetime.now().strftime("%Y-%m-%d"), obs_gasto.strip().capitalize() if obs_gasto else ""))
+                                      (cap1(concepto), cat_gasto, monto_gasto, datetime.now().strftime("%Y-%m-%d"), cap1(obs_gasto) if obs_gasto else ""))
                             conn.commit()
                             st.success("¡Gasto registrado e integrado correctamente!")
                         else:
@@ -1442,7 +1971,7 @@ elif st.session_state.user_role == "admin":
             st.markdown("<h4 style='color:#be185d;'>Últimos Gastos Registrados</h4>", unsafe_allow_html=True)
             gastos_df = pd.read_sql("SELECT fecha as Fecha, concepto as Concepto, categoria as Categoria, monto_crc as 'Monto (CRC)', observaciones as Observaciones FROM gastos ORDER BY id DESC LIMIT 10", conn)
             if not gastos_df.empty:
-                st.dataframe(gastos_df, use_container_width=True)
+                st.dataframe(gastos_df)
 
         # 6. Finanzas y Reportes
         elif menu_principal == "📊 Finanzas y Reportes":
@@ -1605,7 +2134,7 @@ elif st.session_state.user_role == "admin":
 
                 if st.button("⚡ Procesar y Cobrar Venta", key="btn_pos_cobrar"):
                     if nombre_prod_vr and nombre_prod_vr.strip():
-                        prod_vr_clean = nombre_prod_vr.strip().capitalize()
+                        prod_vr_clean = cap1(nombre_prod_vr)
                         id_cli_final = df_cli_vr[df_cli_vr["display"] == cli_vr_selected]["id_cliente"].values[0] if cli_vr_selected != "Venta General / Anónima" else None
                         if tipo_origen == "Del Stock General" and id_prod_inv is not None:
                             c.execute("UPDATE productos SET cantidad = cantidad - ? WHERE id = ?", (cant_vr, id_prod_inv))
@@ -1645,7 +2174,7 @@ elif st.session_state.user_role == "admin":
             with card():
                 st.markdown("<h4 style='color:#be185d;'>➕ Añadir Nuevo Producto al Inventario</h4>", unsafe_allow_html=True)
 
-                # El escáner va fuera del formulario porque necesita recargar la página al instante
+                # El escáner va fuera del formulario para poder llenar el campo del código al instante
                 escanear_codigo_barras("new_stock", label="📷 Escanear código de barras con la cámara (opcional)")
                 if "codigo_new_stock" not in st.session_state:
                     st.session_state["codigo_new_stock"] = ""
@@ -1669,10 +2198,9 @@ elif st.session_state.user_role == "admin":
                         if new_desc.strip():
                             c.execute("""INSERT INTO productos (id_cliente, tienda, categoria, descripcion, precio, moneda, cantidad, estado, observaciones, codigo_barras)
                                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                                      (None, new_tienda.strip().capitalize(), new_cat.strip().capitalize(), new_desc.strip().capitalize(), new_precio, "CRC", new_cant, "Disponible en Inventario", new_obs.strip().capitalize() if new_obs else "", new_barcode.strip() if new_barcode else ""))
+                                      (None, cap1(new_tienda), cap1(new_cat), cap1(new_desc), new_precio, "CRC", new_cant, "Disponible en Inventario", cap1(new_obs) if new_obs else "", new_barcode.strip() if new_barcode else ""))
                             conn.commit()
-                            st.session_state["codigo_new_stock"] = ""
-                            st.success(f"¡Producto '{new_desc}' añadido al inventario exitosamente!")
+                            flash("success", f"¡Producto '{new_desc}' añadido al inventario exitosamente!")
                             st.rerun()
                         else:
                             st.error("Debes ingresar al menos la descripción del producto.")
@@ -1680,7 +2208,7 @@ elif st.session_state.user_role == "admin":
             with card():
                 st.markdown("<h4 style='color:#be185d;'>📊 Tabla de Inventario (Stock General)</h4>", unsafe_allow_html=True)
                 df_stock_table = pd.read_sql("SELECT id, codigo_barras as 'Cód. Barras', descripcion as Producto, tienda as Tienda, categoria as Categoría, precio as Precio, cantidad as Stock FROM productos WHERE id_cliente IS NULL OR id_cliente = ''", conn)
-                st.dataframe(df_stock_table, use_container_width=True)
+                st.dataframe(df_stock_table)
 
             with card():
                 st.markdown("<h4 style='color:#be185d;'>✏️ Editar Producto del Stock</h4>", unsafe_allow_html=True)
@@ -1702,27 +2230,27 @@ elif st.session_state.user_role == "admin":
 
                         c_e1, c_e2 = st.columns(2)
                         with c_e1:
-                            n_desc = st.text_input("Descripción", value=p_edit_data[0] or "", key="inv_ed_desc")
-                            n_precio = st.number_input("Precio", value=float(p_edit_data[3]) if p_edit_data[3] is not None else 0.0, step=500.0, key="inv_ed_pre")
-                            n_cant = st.number_input("Stock", value=int(p_edit_data[4]) if p_edit_data[4] is not None else 1, step=1, key="inv_ed_can")
+                            n_desc = st.text_input("Descripción", value=p_edit_data[0] or "", key=f"inv_ed_desc_{id_prod_edit}")
+                            n_precio = st.number_input("Precio", value=float(p_edit_data[3]) if p_edit_data[3] is not None else 0.0, step=500.0, key=f"inv_ed_pre_{id_prod_edit}")
+                            n_cant = st.number_input("Stock", value=int(p_edit_data[4]) if p_edit_data[4] is not None else 1, step=1, key=f"inv_ed_can_{id_prod_edit}")
                         with c_e2:
-                            n_tienda = st.text_input("Tienda", value=p_edit_data[1] if p_edit_data[1] else "", key="inv_ed_tie")
-                            n_cat = st.text_input("Categoría", value=p_edit_data[2] if p_edit_data[2] else "", key="inv_ed_cat")
+                            n_tienda = st.text_input("Tienda", value=p_edit_data[1] if p_edit_data[1] else "", key=f"inv_ed_tie_{id_prod_edit}")
+                            n_cat = st.text_input("Categoría", value=p_edit_data[2] if p_edit_data[2] else "", key=f"inv_ed_cat_{id_prod_edit}")
                             n_barcode = st.text_input("Código de Barras", key=clave_barcode_edit)
 
                         c_b1, c_b2 = st.columns(2)
                         with c_b1:
                             if st.button("💾 Guardar Cambios de Stock", key="btn_inv_save"):
                                 c.execute("UPDATE productos SET descripcion=?, tienda=?, categoria=?, precio=?, cantidad=?, codigo_barras=? WHERE id=?", 
-                                          (n_desc.strip().capitalize(), n_tienda.strip().capitalize(), n_cat.strip().capitalize(), n_precio, n_cant, n_barcode.strip() if n_barcode else "", id_prod_edit))
+                                          (cap1(n_desc), cap1(n_tienda), cap1(n_cat), n_precio, n_cant, n_barcode.strip() if n_barcode else "", id_prod_edit))
                                 conn.commit()
-                                st.success("¡Producto en stock actualizado!")
+                                flash("success", "¡Producto en stock actualizado!")
                                 st.rerun()
                         with c_b2:
                             if st.button("🗑 Eliminar Producto", key="btn_inv_del"):
                                 c.execute("DELETE FROM productos WHERE id=?", (id_prod_edit,))
                                 conn.commit()
-                                st.warning("Producto eliminado del inventario.")
+                                flash("warning", "Producto eliminado del inventario.")
                                 st.rerun()
                 else:
                     st.info("No hay productos en el stock general para editar.")

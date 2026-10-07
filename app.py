@@ -60,8 +60,14 @@ def _gh_config():
     token, repo = _secret("GITHUB_TOKEN"), _secret("GITHUB_REPO")
     if not token or not repo:
         return None
-    return {"token": str(token).strip(),
-            "repo": str(repo).strip().strip("/"),
+    repo = str(repo).strip().strip("/")
+    for prefijo in ("https://github.com/", "http://github.com/", "github.com/"):
+        if repo.lower().startswith(prefijo):
+            repo = repo[len(prefijo):]
+    if repo.lower().endswith(".git"):
+        repo = repo[:-4]
+    return {"token": str(token).strip().strip('"').strip("'"),
+            "repo": repo.strip("/"),
             "branch": str(_secret("GITHUB_BRANCH", "main")).strip()}
 
 
@@ -78,16 +84,52 @@ def _gh_request(method, url, token, payload=None, raw=False):
         return r.read()
 
 
+def _gh_texto_http(e):
+    """Mensaje que GitHub devuelve junto al error (por ejemplo 'Branch main not found')."""
+    try:
+        return str(json.loads(e.read().decode("utf-8", "ignore")).get("message", ""))
+    except Exception:
+        return ""
+
+
 def _gh_mensaje_error(e):
     if isinstance(e, urllib.error.HTTPError):
+        detalle = _gh_texto_http(e)
+        extra = f" GitHub dice: «{detalle}»." if detalle else ""
         if e.code == 401:
-            return "GitHub rechazó el token (401). Revisa que GITHUB_TOKEN sea correcto y no haya vencido."
+            return "GitHub rechazó el token (401). Revisa que GITHUB_TOKEN sea correcto y no haya vencido." + extra
         if e.code == 403:
-            return "GitHub negó el permiso (403). El token necesita 'Contents: Read and write' sobre el repositorio."
+            return "GitHub negó el permiso (403). El token necesita 'Contents: Read and write' sobre el repositorio." + extra
         if e.code == 404:
-            return "GitHub no encontró el repositorio o la rama (404). Revisa GITHUB_REPO (usuario/repositorio) y GITHUB_BRANCH."
-        return f"GitHub respondió con el error {e.code}."
+            return "GitHub no encontró el repositorio (404). Revisa GITHUB_REPO (usuario/repositorio) y que el token tenga acceso a él." + extra
+        if e.code == 409 and "empty" in detalle.lower():
+            return "El repositorio está vacío. Créale un archivo README.md desde GitHub y vuelve a intentar." + extra
+        if e.code == 422:
+            return "GitHub rechazó los datos del respaldo (422)." + extra
+        return f"GitHub respondió con el error {e.code}." + extra
     return f"No se pudo conectar con GitHub: {e}"
+
+
+def _gh_rama(cfg):
+    """Devuelve la rama a usar. Si la configurada no existe, usa la rama principal del repositorio.
+    Devuelve None si el repositorio aún no tiene ramas (GitHub crea la principal al guardar el primer archivo)."""
+    base = f"https://api.github.com/repos/{cfg['repo']}"
+    try:
+        _gh_request("GET", f"{base}/branches/{urllib.parse.quote(cfg['branch'])}", cfg["token"])
+        return cfg["branch"]
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+    info = json.loads(_gh_request("GET", base, cfg["token"]))
+    principal = info.get("default_branch")
+    if principal:
+        try:
+            _gh_request("GET", f"{base}/branches/{urllib.parse.quote(principal)}", cfg["token"])
+            return principal
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+    return None
 
 
 def github_subir(ruta_repo, contenido, mensaje):
@@ -97,18 +139,35 @@ def github_subir(ruta_repo, contenido, mensaje):
         return False, "GitHub no está configurado."
     url = f"https://api.github.com/repos/{cfg['repo']}/contents/{urllib.parse.quote(ruta_repo)}"
     try:
-        sha = None
-        try:
-            info = json.loads(_gh_request("GET", f"{url}?ref={urllib.parse.quote(cfg['branch'])}", cfg["token"]))
-            sha = info.get("sha")
-        except urllib.error.HTTPError as e:
-            if e.code != 404:
-                raise
-        payload = {"message": mensaje, "branch": cfg["branch"],
-                   "content": base64.b64encode(contenido).decode("ascii")}
+        rama = _gh_rama(cfg)
+
+        def sha_actual():
+            consulta = f"{url}?ref={urllib.parse.quote(rama)}" if rama else url
+            try:
+                info = json.loads(_gh_request("GET", consulta, cfg["token"]))
+                return info.get("sha") if isinstance(info, dict) else None
+            except urllib.error.HTTPError as e:
+                if e.code != 404:
+                    raise
+                return None
+
+        payload = {"message": mensaje, "content": base64.b64encode(contenido).decode("ascii")}
+        if rama:
+            payload["branch"] = rama
+        sha = sha_actual()
         if sha:
             payload["sha"] = sha
-        _gh_request("PUT", url, cfg["token"], payload)
+        try:
+            _gh_request("PUT", url, cfg["token"], payload)
+        except urllib.error.HTTPError as e:
+            # el archivo cambió o ya existía: se vuelve a leer su versión y se reintenta una vez
+            if e.code in (409, 422):
+                nuevo_sha = sha_actual()
+                if nuevo_sha and nuevo_sha != payload.get("sha"):
+                    payload["sha"] = nuevo_sha
+                    _gh_request("PUT", url, cfg["token"], payload)
+                    return True, "ok"
+            raise
         return True, "ok"
     except Exception as e:
         return False, _gh_mensaje_error(e)
@@ -116,7 +175,10 @@ def github_subir(ruta_repo, contenido, mensaje):
 
 def github_leer(ruta_repo):
     cfg = _gh_config()
-    url = f"https://api.github.com/repos/{cfg['repo']}/contents/{urllib.parse.quote(ruta_repo)}?ref={urllib.parse.quote(cfg['branch'])}"
+    rama = _gh_rama(cfg)
+    url = f"https://api.github.com/repos/{cfg['repo']}/contents/{urllib.parse.quote(ruta_repo)}"
+    if rama:
+        url += f"?ref={urllib.parse.quote(rama)}"
     return _gh_request("GET", url, cfg["token"], raw=True)
 
 

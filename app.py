@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 import io
 import pandas as pd
-from PIL import Image, ImageDraw, ImageFont, ImageChops
+from PIL import Image, ImageDraw, ImageFont, ImageChops, ImageOps
 import streamlit as st
 import urllib.parse
 import urllib.request
@@ -15,6 +15,8 @@ import json
 import zipfile
 import tempfile
 import base64
+import hmac
+import secrets
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -263,22 +265,30 @@ c.execute("""CREATE TABLE IF NOT EXISTS ventas_rapidas (
                descuento REAL,
                total REAL)""")
 
-columnas_necesarias_productos = [
-    ("categoria", "TEXT"),
-    ("precio", "REAL DEFAULT 0.0"),
-    ("moneda", "TEXT DEFAULT 'CRC'"),
-    ("cantidad", "INTEGER DEFAULT 1"),
-    ("observaciones", "TEXT"),
-    ("foto_path", "TEXT"),
-    ("codigo_barras", "TEXT")
-]
+def asegurar_columnas():
+    """Agrega columnas nuevas a bases de datos viejas (también se usa tras restaurar un respaldo)."""
+    nuevas = {
+        "productos": [
+            ("categoria", "TEXT"), ("precio", "REAL DEFAULT 0.0"), ("moneda", "TEXT DEFAULT 'CRC'"),
+            ("cantidad", "INTEGER DEFAULT 1"), ("observaciones", "TEXT"), ("foto_path", "TEXT"),
+            ("codigo_barras", "TEXT"),
+        ],
+        "clientes": [
+            ("provincia", "TEXT"), ("canton", "TEXT"), ("distrito", "TEXT"),
+            ("senas", "TEXT"), ("metodo_envio", "TEXT"),
+            ("origen", "TEXT"), ("fecha_registro", "TEXT"),
+        ],
+    }
+    conn.execute("CREATE TABLE IF NOT EXISTS config (clave TEXT PRIMARY KEY, valor TEXT)")
+    for tabla, cols in nuevas.items():
+        existentes = {r[1] for r in conn.execute(f"PRAGMA table_info({tabla})")}
+        for nombre_col, tipo in cols:
+            if nombre_col not in existentes:
+                conn.execute(f"ALTER TABLE {tabla} ADD COLUMN {nombre_col} {tipo}")
+    conn.commit()
 
-for col_name, col_type in columnas_necesarias_productos:
-    try:
-        c.execute(f"ALTER TABLE productos ADD COLUMN {col_name} {col_type}")
-        conn.commit()
-    except sqlite3.OperationalError:
-        pass
+
+asegurar_columnas()
 
 c.execute("""CREATE TABLE IF NOT EXISTS abonos (
                id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -315,6 +325,14 @@ def cap1(texto):
     """Pone en mayúscula solo la primera letra (sin borrar mayúsculas como en 'Nike Air' o 'MAC')."""
     t = str(texto or "").strip()
     return t[:1].upper() + t[1:]
+
+
+def titulo_es(texto):
+    """'san rafael de alajuela' -> 'San Rafael de Alajuela' (respeta de, del, la, los, las, y)."""
+    chicas = {"de", "del", "la", "las", "los", "y", "el"}
+    palabras = str(texto or "").strip().split()
+    return " ".join(w.lower() if (i > 0 and w.lower() in chicas) else w[:1].upper() + w[1:].lower()
+                    for i, w in enumerate(palabras))
 
 
 def flash(tipo, mensaje):
@@ -411,6 +429,7 @@ def restaurar_respaldo(datos):
             origen.backup(conn)
         finally:
             origen.close()
+        asegurar_columnas()
         if zf:
             _extraer_fotos_zip(zf)
         return True, "Datos restaurados correctamente."
@@ -466,8 +485,9 @@ def _tiene_colon(font):
 def _fuente(bold, size):
     nombres = list(_FUENTES_BOLD if bold else _FUENTES_REG)
     try:  # DejaVu viene incluida con matplotlib, si está instalado
-        import matplotlib
-        mp = os.path.join(matplotlib.get_data_path(), "fonts", "ttf")
+        import importlib
+        mpl = importlib.import_module("matplotlib")
+        mp = os.path.join(mpl.get_data_path(), "fonts", "ttf")
         nombres.append(os.path.join(mp, "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"))
     except Exception:
         pass
@@ -553,12 +573,12 @@ def _mensaje_whatsapp(nombre_cliente, prods, nombre_caja, precio_caja,
 
 
 def generar_factura_imagen(id_cliente):
-    c.execute("SELECT nombre, telefono FROM clientes WHERE id_cliente = ?", (id_cliente,))
+    c.execute("SELECT nombre, telefono, provincia, canton, distrito, senas, metodo_envio FROM clientes WHERE id_cliente = ?", (id_cliente,))
     res_cli = c.fetchone()
     if not res_cli:
         return None, None
 
-    nombre_cliente, telefono = res_cli
+    nombre_cliente, telefono, prov_c, canton_c, distrito_c, senas_c, envio_c = res_cli
 
     c.execute("SELECT nombre_caja, precio_caja FROM cajas_emprendedores WHERE id_cliente = ?", (id_cliente,))
     res_caja = c.fetchone()
@@ -588,7 +608,9 @@ def generar_factura_imagen(id_cliente):
         filas.append((str(p[0] or ""), str(cant), str(p[3] or ""), (p[1] or 0.0) * cant))
 
     header_h, row_h = 250, 58
-    client_top, client_h = header_h + 36, 130
+    ubic_txt = texto_ubicacion(prov_c, canton_c, distrito_c)
+    extra_partes = ([f"Envío: {envio_c}"] if envio_c else []) + ([ubic_txt] if ubic_txt else [])
+    client_top, client_h = header_h + 36, 130 + (34 if extra_partes else 0)
     table_top = client_top + client_h + 36
     rows_top = table_top + 54
     rows_h = max(len(filas), 1) * row_h
@@ -649,6 +671,8 @@ def generar_factura_imagen(id_cliente):
     T(66, client_top + 20, "CLIENTA", F(True, 15), K["raspberry"])
     T(66, client_top + 44, ajustar(str(nombre_cliente), F(True, 32), 520), F(True, 32), K["text"])
     T(66, client_top + 90, f"Tel: {telefono if telefono else 'No registrado'}", F(False, 20), K["muted"])
+    if extra_partes:
+        T(66, client_top + 124, ajustar("   ·   ".join(extra_partes), F(False, 19), 870), F(False, 19), K["muted"])
     if nombre_caja:
         etq = _etiqueta_caja(nombre_caja)
         fp = F(True, 20)
@@ -730,6 +754,183 @@ def generar_factura_imagen(id_cliente):
     link = f"https://wa.me/{telefono_clean}?text={urllib.parse.quote(mensaje)}" if telefono_clean else None
 
     return filepath, link
+
+# -------------------------------------------------------------
+# TICKET IMPRIMIBLE (ESTILO SUPERMERCADO, 80 mm / 58 mm)
+# -------------------------------------------------------------
+@functools.lru_cache(maxsize=1)
+def _logo_ticket_b64():
+    """Logo en blanco y negro (fondo blanco) para que salga limpio en impresoras térmicas."""
+    logo, bg = _logo_factura()
+    if logo is None:
+        return None
+    try:
+        w = 380
+        im = logo.resize((w, max(1, int(logo.height * w / logo.width))), Image.LANCZOS)
+        diff = ImageChops.difference(im, Image.new("RGB", im.size, bg)).convert("L")
+        mask = diff.point(lambda v: min(255, v * 6))
+        base = Image.new("RGB", im.size, "#FFFFFF")
+        base.paste(im, (0, 0), mask)
+        gris = ImageOps.autocontrast(base.convert("L"), cutoff=1)
+        buf = io.BytesIO()
+        gris.save(buf, "PNG", optimize=True)
+        return base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        return None
+
+
+_TICKET_PLANTILLA = """<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>%%TITULO%%</title>
+<style id="pg">@page { margin: 2mm; }</style>
+<style>
+  html, body { margin: 0; padding: 0; background: #f3f4f6; }
+  .bar { text-align: center; padding: 10px 8px 4px; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 14px; color: #4a2c3b; }
+  .bar select { font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid #F3B2C9; margin-right: 8px; }
+  .bar button { background: #BE185D; color: #fff; border: 0; border-radius: 999px; padding: 11px 22px; font-size: 15px; font-weight: 700; cursor: pointer; }
+  #t { width: 72mm; margin: 10px auto 22px; padding: 4mm 3mm 8mm; background: #fff; color: #000;
+       font-family: 'Courier New', Courier, 'Liberation Mono', monospace; font-size: 12.5px; line-height: 1.38;
+       box-shadow: 0 1px 8px rgba(0,0,0,.25); box-sizing: border-box; }
+  #t.p58 { font-size: 11px; }
+  #t img { display: block; margin: 0 auto 4px; width: 46mm; max-width: 80%; }
+  #t.p58 img { width: 34mm; }
+  .c { text-align: center; } .b { font-weight: 700; }
+  .nombre { font-size: 1.45em; font-weight: 700; letter-spacing: 1px; text-align: center; }
+  .sep { border-top: 1px dashed #000; margin: 7px 0; }
+  .sep2 { border-top: 2px solid #000; margin: 7px 0; }
+  .r { display: flex; justify-content: space-between; gap: 8px; }
+  .r span:last-child { white-space: nowrap; text-align: right; }
+  .it { margin-bottom: 5px; } .it .d { font-weight: 700; word-break: break-word; }
+  .big { font-size: 1.3em; font-weight: 700; }
+  .dim { opacity: .85; }
+  @media print {
+    html, body { background: #fff; }
+    .bar { display: none !important; }
+    #t { width: auto !important; margin: 0 !important; padding: 0 0 8mm !important; box-shadow: none !important; }
+  }
+</style></head>
+<body>
+<div class="bar">
+  <label>Papel: <select id="papel"><option value="80">80 mm (estándar)</option><option value="58">58 mm (pequeño)</option></select></label>
+  <button onclick="imprimir()">🖨️ Imprimir ticket</button>
+</div>
+<div id="t">%%CUERPO%%</div>
+<script>
+  function aplicar() {
+    var mm = parseInt(document.getElementById('papel').value, 10);
+    var t = document.getElementById('t');
+    t.style.width = (mm - 8) + 'mm';
+    t.className = mm < 70 ? 'p58' : '';
+  }
+  function imprimir() { aplicar(); setTimeout(function () { window.print(); }, 80); }
+  document.getElementById('papel').addEventListener('change', aplicar);
+</script>
+</body></html>"""
+
+
+def generar_ticket_html(id_cliente):
+    """Ticket tipo supermercado. Devuelve (html, alto_sugerido) o (None, 0)."""
+    E = html.escape
+    c.execute("SELECT nombre, telefono, provincia, canton, distrito, senas, metodo_envio FROM clientes WHERE id_cliente = ?", (id_cliente,))
+    cli = c.fetchone()
+    if not cli:
+        return None, 0
+    nombre, tel, prov, canton, distrito, senas, envio = cli
+
+    c.execute("SELECT nombre_caja, precio_caja FROM cajas_emprendedores WHERE id_cliente = ?", (id_cliente,))
+    rc = c.fetchone()
+    nombre_caja, precio_caja = (rc[0], rc[1] or 0.0) if rc else (None, 0.0)
+    c.execute("SELECT descripcion, precio, cantidad FROM productos WHERE id_cliente = ?", (id_cliente,))
+    prods = c.fetchall()
+    c.execute("SELECT monto_crc, fecha FROM abonos WHERE id_cliente = ? ORDER BY id", (id_cliente,))
+    abonos = c.fetchall()
+
+    lineas = []
+    if nombre_caja and precio_caja > 0:
+        lineas.append((f"{_etiqueta_caja(nombre_caja)} (cuota mensual)", 1, precio_caja))
+    for p in prods:
+        lineas.append((str(p[0] or "Artículo"), (p[2] if p[2] else 1), (p[1] or 0.0)))
+    total_compras = sum(q * pr for _, q, pr in lineas)
+    total_abonos = sum((a[0] or 0.0) for a in abonos)
+    saldo = total_compras - total_abonos
+
+    def fila(izq, der, clase=""):
+        return f'<div class="r {clase}"><span>{E(str(izq))}</span><span>{E(str(der))}</span></div>'
+
+    def fecha_corta(f):
+        try:
+            return datetime.strptime(str(f)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+        except Exception:
+            return str(f)[:10]
+
+    b = []
+    logo64 = _logo_ticket_b64()
+    if logo64:  # el logo ya trae el nombre y "Personal Shopper"
+        b.append(f'<img alt="Minici Store" src="data:image/png;base64,{logo64}">')
+    else:
+        b.append('<div class="nombre">MINICI STORE</div><div class="c dim">PERSONAL SHOPPER</div>')
+    b.append('<div class="sep2"></div><div class="c b">ESTADO DE CUENTA</div><div class="sep"></div>')
+    b.append(fila("Fecha:", datetime.now().strftime("%d/%m/%Y %H:%M")))
+    b.append(fila("Ref:", id_cliente))
+    b.append(f'<div class="b" style="margin-top:3px">{E(str(nombre))}</div>')
+    if tel:
+        b.append(f'<div>Tel: {E(str(tel))}</div>')
+    if envio:
+        b.append(f'<div>Envío: {E(str(envio))}</div>')
+    ubic = texto_ubicacion(prov, canton, distrito)
+    if ubic:
+        b.append(f'<div>Dir: {E(ubic)}</div>')
+    if senas:
+        b.append(f'<div class="dim">{E(str(senas))}</div>')
+
+    b.append('<div class="sep"></div>')
+    b.append(fila("DESCRIPCIÓN", "TOTAL", "b"))
+    b.append('<div class="sep"></div>')
+    if not lineas:
+        b.append('<div class="c dim">Sin artículos registrados</div>')
+    for desc, q, pr in lineas:
+        b.append(f'<div class="it"><div class="d">{E(desc)}</div>{fila(f"{q} x {_crc(pr)}", _crc(q * pr))}</div>')
+
+    b.append('<div class="sep"></div>')
+    b.append(fila("TOTAL COMPRAS", _crc(total_compras), "b"))
+    if abonos:
+        b.append('<div style="margin-top:4px" class="dim">Abonos recibidos:</div>')
+        for monto, fecha in abonos[-6:]:
+            b.append(fila(f"  {fecha_corta(fecha)}", "-" + _crc(monto)))
+        if len(abonos) > 6:
+            b.append(f'<div class="dim">  (+{len(abonos) - 6} abonos anteriores)</div>')
+    b.append(fila("TOTAL ABONADO", "-" + _crc(total_abonos), "b"))
+    b.append('<div class="sep2"></div>')
+    if saldo > 0:
+        b.append(fila("SALDO PENDIENTE", _crc(saldo), "big"))
+    else:
+        b.append('<div class="c big">*** CUENTA AL DÍA ***</div>')
+    b.append('<div class="sep2"></div>')
+    b.append('<div class="c b" style="margin-top:6px">¡GRACIAS POR SU COMPRA!</div>')
+    b.append('<div class="c dim">Conserve este comprobante</div>')
+    b.append('<div class="c dim" style="margin-top:2px">Minici Store · Personal Shopper</div>')
+
+    doc = (_TICKET_PLANTILLA.replace("%%TITULO%%", E(f"Ticket {id_cliente}"))
+           .replace("%%CUERPO%%", "\n".join(b)))
+    alto = 600 + 62 * len(lineas) + 22 * min(len(abonos), 6) + (60 if (ubic or senas or envio) else 0)
+    return doc, alto
+
+
+def mostrar_ticket(id_cliente, key, con_checkbox=False):
+    """Muestra el ticket con su botón de imprimir. Con checkbox queda oculto hasta que se pida."""
+    import streamlit.components.v1 as components
+    if con_checkbox and not st.checkbox("🧾 Ver / imprimir ticket (estilo supermercado)", key=f"chk_ticket_{key}"):
+        return
+    doc, alto = generar_ticket_html(id_cliente)
+    if not doc:
+        return
+    st.caption("🧾 Ticket listo: toca «Imprimir ticket», elige tu impresora y deja los márgenes en «ninguno».")
+    components.html(doc, height=alto, scrolling=True)
+    st.download_button("⬇️ Descargar ticket (se abre en el navegador para imprimir)", data=doc.encode("utf-8"),
+                       file_name=f"Ticket_{id_cliente}.html", mime="text/html", key=f"dl_ticket_{key}")
+
+
 
 _HTML_ESCANER = r'''<!DOCTYPE html>
 <html lang="es">
@@ -1006,6 +1207,60 @@ def escanear_codigo_barras(key_suffix, label="📷 Escanear código de barras co
             st.session_state[f"scan_ts_{key_suffix}"] = ts
             st.session_state[f"codigo_{key_suffix}"] = str(res["code"]).strip()
             st.toast(f"✅ Código escaneado: {res['code']}")
+
+
+# ==========================================
+# DIRECCIÓN (COSTA RICA) Y MÉTODO DE ENVÍO
+# ==========================================
+UBICACIONES_CR = {
+    "San José": ["San José", "Escazú", "Desamparados", "Puriscal", "Tarrazú", "Aserrí", "Mora", "Goicoechea",
+                 "Santa Ana", "Alajuelita", "Vázquez de Coronado", "Acosta", "Tibás", "Moravia", "Montes de Oca",
+                 "Turrubares", "Dota", "Curridabat", "Pérez Zeledón", "León Cortés Castro"],
+    "Alajuela": ["Alajuela", "San Ramón", "Grecia", "San Mateo", "Atenas", "Naranjo", "Palmares", "Poás", "Orotina",
+                 "San Carlos", "Zarcero", "Sarchí", "Upala", "Los Chiles", "Guatuso", "Río Cuarto"],
+    "Cartago": ["Cartago", "Paraíso", "La Unión", "Jiménez", "Turrialba", "Alvarado", "Oreamuno", "El Guarco"],
+    "Heredia": ["Heredia", "Barva", "Santo Domingo", "Santa Bárbara", "San Rafael", "San Isidro", "Belén", "Flores",
+                "San Pablo", "Sarapiquí"],
+    "Guanacaste": ["Liberia", "Nicoya", "Santa Cruz", "Bagaces", "Carrillo", "Cañas", "Abangares", "Tilarán",
+                   "Nandayure", "La Cruz", "Hojancha"],
+    "Puntarenas": ["Puntarenas", "Esparza", "Buenos Aires", "Montes de Oro", "Osa", "Quepos", "Golfito", "Coto Brus",
+                   "Parrita", "Corredores", "Garabito", "Monteverde", "Puerto Jiménez"],
+    "Limón": ["Limón", "Pococí", "Siquirres", "Talamanca", "Matina", "Guácimo"],
+}
+METODOS_ENVIO = ["Correos de Costa Rica", "Encomiendas Tabo"]
+
+
+def texto_ubicacion(provincia, canton, distrito):
+    return ", ".join([str(x).strip() for x in (provincia, canton, distrito) if x and str(x).strip()])
+
+
+def selector_ubicacion(key_prefix, actual=None):
+    """Provincia → Cantón (según la provincia) → Distrito (+ otras señas). Devuelve (prov, cantón, distrito, señas)."""
+    actual = actual or {}
+    provs = [""] + list(UBICACIONES_CR.keys())
+    p0 = actual.get("provincia") or ""
+    col_p, col_c, col_d = st.columns(3)
+    with col_p:
+        prov = st.selectbox("Provincia", provs, index=provs.index(p0) if p0 in provs else 0,
+                            format_func=lambda x: x or "Seleccionar…", key=f"{key_prefix}_prov")
+    cantones = [""] + (UBICACIONES_CR.get(prov, []) if prov else [])
+    c0 = actual.get("canton") or ""
+    with col_c:
+        canton = st.selectbox("Cantón", cantones, index=cantones.index(c0) if c0 in cantones else 0,
+                              format_func=lambda x: x or ("Seleccionar…" if prov else "Elige la provincia"),
+                              key=f"{key_prefix}_canton_{prov or 'x'}", disabled=not prov)
+    with col_d:
+        distrito = st.text_input("Distrito", value=actual.get("distrito") or "", placeholder="Ej. San Rafael",
+                                 key=f"{key_prefix}_distrito")
+    senas = st.text_input("Otras señas (opcional)", value=actual.get("senas") or "",
+                          placeholder="Ej. 200 m norte de la iglesia, casa blanca", key=f"{key_prefix}_senas")
+    return prov, canton, titulo_es(distrito), senas.strip()
+
+
+def selector_envio(key, actual=None):
+    return st.radio("Método de envío", METODOS_ENVIO,
+                    index=METODOS_ENVIO.index(actual) if actual in METODOS_ENVIO else 0,
+                    horizontal=True, key=key)
 
 
 # ==========================================
@@ -1408,6 +1663,211 @@ st.markdown(
 )
 
 # -------------------------------------------------------------
+# 3B. REGISTRO PÚBLICO POR LINK (las clientas se registran solas)
+# -------------------------------------------------------------
+def cfg_get(clave, default=None):
+    r = c.execute("SELECT valor FROM config WHERE clave = ?", (clave,)).fetchone()
+    return r[0] if r and r[0] is not None else default
+
+
+def cfg_set(clave, valor):
+    c.execute("INSERT OR REPLACE INTO config (clave, valor) VALUES (?, ?)", (clave, str(valor)))
+    conn.commit()
+
+
+def _solo_digitos(texto):
+    return "".join(ch for ch in str(texto or "") if ch.isdigit())
+
+
+def _normalizar_telefono(texto):
+    d = _solo_digitos(texto)
+    if len(d) == 11 and d.startswith("506"):
+        d = d[3:]
+    return d
+
+
+def siguiente_id_cliente(prefijo):
+    filas = c.execute("SELECT id_cliente FROM clientes").fetchall()
+    nums = []
+    for (cod,) in filas:
+        cod = str(cod or "")
+        if cod.startswith(prefijo + "-") and cod[len(prefijo) + 1:].strip().isdigit():
+            nums.append(int(cod[len(prefijo) + 1:]))
+    return f"{prefijo}-{(max(nums) + 1 if nums else 1):04d}"
+
+
+def _token_registro():
+    """Código secreto del link. Se crea la primera vez que se necesita."""
+    t = cfg_get("registro_token")
+    if not t:
+        t = secrets.token_urlsafe(9)
+        cfg_set("registro_token", t)
+    return t
+
+
+def _url_base_app():
+    guardada = cfg_get("url_base")
+    if guardada:
+        return str(guardada).strip().rstrip("/")
+    try:
+        h = st.context.headers
+        host = h.get("Host") or h.get("host")
+        if host:
+            proto = h.get("X-Forwarded-Proto") or ("http" if str(host).startswith(("localhost", "127.")) else "https")
+            return f"{proto}://{host}"
+    except Exception:
+        pass
+    return ""
+
+
+def _link_valido(token_url):
+    token = cfg_get("registro_token")
+    if not token or cfg_get("registro_activo", "1") != "1":
+        return False
+    return hmac.compare_digest(str(token_url), str(token))
+
+
+def pagina_registro_publico(token_url):
+    """Pantalla pública: solo se llega con el link secreto. No muestra ningún dato de nadie."""
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        logo_path = next((n for n in ["logo.jpg", "logo.png", "logo.jpeg", "21237.jpg"] if os.path.exists(n)), None)
+        if logo_path:
+            st.image(logo_path)
+        else:
+            st.markdown("<h1 style='text-align: center; color: #be185d;'>🛍️ Minici Store</h1>", unsafe_allow_html=True)
+
+    if not _link_valido(token_url):
+        st.markdown(
+            """<div class="login-hero"><h2>Este link no está disponible</h2>
+            <p>Pídele a Minici Store que te envíe el link de registro actualizado.</p></div>""",
+            unsafe_allow_html=True)
+        return
+
+    ok = st.session_state.get("pub_ok")
+    if ok:
+        st.markdown(
+            f"""<div class="login-hero"><h2>🎉 ¡Listo, {html.escape(ok['nombre'])}!</h2>
+            <p>Tu registro quedó guardado. Este es tu código de acceso:</p></div>""",
+            unsafe_allow_html=True)
+        with card():
+            st.markdown(f"<h2 style='text-align:center; color:#be185d; letter-spacing:2px;'>{html.escape(ok['id'])}</h2>",
+                        unsafe_allow_html=True)
+            st.info("📌 Guarda este código (puedes tomarle captura). Con él entras a ver tus pedidos y abonos.")
+            st.markdown('<div style="text-align:center"><a href="?" target="_self">Ingresar a mi cuenta</a></div>',
+                        unsafe_allow_html=True)
+            if st.button("Registrar a otra persona", key="pub_otra"):
+                st.session_state["pub_n"] = st.session_state.get("pub_n", 0) + 1
+                st.session_state.pop("pub_ok", None)
+                st.rerun()
+        return
+
+    st.markdown(
+        """<div class="login-hero"><h2>¡Regístrate en Minici Store!</h2>
+        <p>Completa tus datos para crear tu cuenta de clienta.</p></div>""",
+        unsafe_allow_html=True)
+
+    n = st.session_state.get("pub_n", 0)
+    kp = f"pub{n}"
+    with card():
+        nombre = st.text_input("Nombre completo *", placeholder="Ej. María López", key=f"{kp}_nombre")
+        tel = st.text_input("Teléfono / WhatsApp *", placeholder="Ej. 8888 8888", key=f"{kp}_tel")
+        correo = st.text_input("Correo electrónico (opcional)", placeholder="correo@ejemplo.com", key=f"{kp}_correo")
+        st.markdown("📍 **¿Dónde te entregamos?**")
+        prov, canton, distrito, senas = selector_ubicacion(kp)
+        st.caption("🔒 Tus datos se usan solo para gestionar tus pedidos y envíos.")
+
+        if st.button("✅ Crear mi registro", key=f"{kp}_enviar"):
+            if st.session_state.get("pub_conteo", 0) >= 5:
+                st.error("Se alcanzó el máximo de registros desde este dispositivo. Escríbenos por WhatsApp.")
+            else:
+                faltan = []
+                if len(nombre.strip()) < 3:
+                    faltan.append("tu nombre")
+                tel_n = _normalizar_telefono(tel)
+                if not (8 <= len(tel_n) <= 15):
+                    faltan.append("un teléfono válido (8 dígitos)")
+                if not prov:
+                    faltan.append("la provincia")
+                if not canton:
+                    faltan.append("el cantón")
+                if not distrito:
+                    faltan.append("el distrito")
+                if faltan:
+                    st.error("Falta completar: " + ", ".join(faltan) + ".")
+                elif any(_normalizar_telefono(t)[-8:] == tel_n[-8:] for (t,) in c.execute("SELECT telefono FROM clientes").fetchall() if t):
+                    st.warning("Este teléfono ya está registrado. Si necesitas actualizar tus datos, escríbenos por WhatsApp.")
+                else:
+                    nuevo_id = None
+                    for _ in range(3):
+                        cand = siguiente_id_cliente("MIN")
+                        try:
+                            c.execute("INSERT INTO clientes (id_cliente, nombre, telefono, correo, provincia, canton, distrito, senas, metodo_envio, origen, fecha_registro) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                      (cand, nombre.strip().title(), tel_n, correo.strip(), prov, canton, distrito, senas, None,
+                                       "link", datetime.now().strftime("%Y-%m-%d %H:%M")))
+                            conn.commit()
+                            nuevo_id = cand
+                            break
+                        except sqlite3.IntegrityError:
+                            conn.rollback()
+                    if nuevo_id:
+                        st.session_state["pub_conteo"] = st.session_state.get("pub_conteo", 0) + 1
+                        st.session_state["pub_ok"] = {"nombre": nombre.strip().title(), "id": nuevo_id}
+                        st.rerun()
+                    else:
+                        st.error("No se pudo completar el registro. Intenta de nuevo en unos segundos.")
+
+
+def panel_link_registro():
+    """Cuadro del administrador: copiar, compartir, desactivar o cambiar el link de registro."""
+    with st.expander("🔗 Link para que las clientas se registren solas"):
+        activo = cfg_get("registro_activo", "1") == "1"
+        base = _url_base_app()
+        token = _token_registro()
+        if base:
+            link = f"{base}/?registro={token}"
+            st.markdown("**Pásales este link** (toca el ícono de la derecha para copiarlo):")
+            st.code(link, language=None)
+            msg = f"¡Hola! 💖 Regístrate en Minici Store con este link: {link}"
+            st.markdown(f'<a href="https://wa.me/?text={urllib.parse.quote(msg)}" target="_blank" class="btn-whatsapp">📲 Compartir por WhatsApp</a>',
+                        unsafe_allow_html=True)
+        else:
+            st.warning("No pude detectar la dirección de tu app. Escríbela abajo (ej. https://minici.streamlit.app) y guarda.")
+        st.caption("Solo quien tenga este link puede registrarse. Las clientas nuevas aparecen en tu directorio con su dirección.")
+
+        nuevo_activo = st.checkbox("Link activo (las clientas pueden registrarse)", value=activo, key="chk_reg_activo")
+        if nuevo_activo != activo:
+            cfg_set("registro_activo", "1" if nuevo_activo else "0")
+            st.rerun()
+
+        url_in = st.text_input("Dirección de tu app", value=base, placeholder="https://tu-app.streamlit.app", key="inp_url_base")
+        if st.button("💾 Guardar dirección", key="btn_url_base") and url_in.strip():
+            cfg_set("url_base", url_in.strip().rstrip("/"))
+            flash("success", "Dirección guardada.")
+            st.rerun()
+
+        st.divider()
+        conf = st.checkbox("Entiendo que el link anterior dejará de funcionar", key="chk_reg_nuevo")
+        if st.button("🔄 Crear un link nuevo", key="btn_reg_nuevo", disabled=not conf):
+            cfg_set("registro_token", secrets.token_urlsafe(9))
+            flash("success", "Link nuevo creado. El anterior ya no funciona.")
+            st.rerun()
+
+        recientes = c.execute("SELECT id_cliente, nombre, telefono, fecha_registro FROM clientes WHERE origen = 'link' ORDER BY fecha_registro DESC LIMIT 5").fetchall()
+        total = c.execute("SELECT COUNT(*) FROM clientes WHERE origen = 'link'").fetchone()[0]
+        if total:
+            st.markdown(f"**Registradas por link: {total}** (últimas 5)")
+            for cod, nom, tl, fr in recientes:
+                st.markdown(f"- `{cod}` · {nom} · {tl} · {fr}")
+
+
+_tok_url = st.query_params.get("registro")
+if _tok_url:
+    pagina_registro_publico(str(_tok_url))
+    st.stop()
+
+
+# -------------------------------------------------------------
 # 4. CONTROL DE SESIÓN Y AUTENTICACIÓN
 # -------------------------------------------------------------
 if "user_role" not in st.session_state:
@@ -1499,26 +1959,15 @@ elif st.session_state.user_role == "admin":
             elif _rsp["github"] is False:
                 st.warning(f"⚠️ El respaldo se creó pero NO se pudo subir a GitHub: {_rsp['detalle']}")
             else:
-                st.info(f"💾 Respaldo creado ({_rsp['hora']}). Descárgalo abajo. Para que también se guarde solo en GitHub, abre «Respaldos y GitHub».")
+                st.info(f"💾 Respaldo creado ({_rsp['hora']}). Descárgalo abajo.")
             st.download_button("⬇️ Descargar respaldo (datos + fotos + Excel)", data=_rsp["zip"],
                                file_name=_rsp["nombre"], mime="application/zip", key="dl_respaldo")
 
-    with st.expander("⚙️ Respaldos y GitHub (configurar / restaurar)"):
+    with st.expander("♻️ Restaurar respaldo"):
         if _gh_config():
             _cfg = _gh_config()
             st.success(f"GitHub conectado: {_cfg['repo']} (rama {_cfg['branch']}). Si el servidor se reinicia, los datos se recuperan solos.")
-        else:
-            st.markdown(
-                "**Para guardar los datos en GitHub automáticamente:**\n"
-                "1. Crea un repositorio **privado** nuevo solo para respaldos (por ejemplo `minici-respaldos`). "
-                "Debe ser privado porque contiene nombres y teléfonos de clientas, y distinto al repositorio de la app: "
-                "si guardas en el repositorio de la app, cada respaldo reinicia la aplicación.\n"
-                "2. En GitHub: *Settings → Developer settings → Fine-grained tokens* → crea un token con acceso solo a ese repositorio "
-                "y el permiso **Contents: Read and write**.\n"
-                "3. En Streamlit Cloud: *Manage app → Settings → Secrets* y pega:"
-            )
-            st.code('GITHUB_TOKEN = "github_pat_xxxxxxxx"\nGITHUB_REPO = "tu-usuario/minici-respaldos"\nGITHUB_BRANCH = "main"', language="toml")
-        st.divider()
+            st.divider()
         st.markdown("**♻️ Restaurar un respaldo** (reemplaza todos los datos actuales)")
         _arch = st.file_uploader("Sube un respaldo .zip (o la base .db)", type=["zip", "db"], key="up_restaurar")
         _ok = st.checkbox("Entiendo que esto reemplaza los clientes, pedidos y abonos actuales", key="chk_restaurar")
@@ -1659,6 +2108,7 @@ elif st.session_state.user_role == "admin":
                                     )
                             if link_wa:
                                 st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Mensaje por WhatsApp</a>', unsafe_allow_html=True)
+                            mostrar_ticket(id_cliente, "compra")
 
         # 2. Clientes y Expedientes
         elif menu_principal == "👩 Clientes y Expedientes":
@@ -1670,6 +2120,7 @@ elif st.session_state.user_role == "admin":
                 """,
                 unsafe_allow_html=True,
             )
+            panel_link_registro()
 
             with card():
                 st.markdown("<h4 style='color:#be185d;'>👤 Registrar Nuevo Cliente / Emprendedor</h4>", unsafe_allow_html=True)
@@ -1689,43 +2140,61 @@ elif st.session_state.user_role == "admin":
                 st.markdown(f"🏷️ <span style='font-size:16px; font-weight:bold; color:#be185d;'>Código asignado: {nuevo_id}</span>", unsafe_allow_html=True)
                 st.write("")
 
-                with st.form("form_registro_cliente", clear_on_submit=True):
-                    nombre = st.text_input("Nombre Completo", placeholder="Ej. Maria Lopez")
-                    tel = st.text_input("Teléfono / WhatsApp", placeholder="Ej. 88888888")
-                    correo = st.text_input("Correo Electrónico", placeholder="Ej. correo@ejemplo.com")
+                n_reg = st.session_state.get("reg_cli_n", 0)
+                kr = f"reg{n_reg}"
+                nombre = st.text_input("Nombre Completo", placeholder="Ej. Maria Lopez", key=f"{kr}_nombre")
+                tel = st.text_input("Teléfono / WhatsApp", placeholder="Ej. 88888888", key=f"{kr}_tel")
+                correo = st.text_input("Correo Electrónico", placeholder="Ej. correo@ejemplo.com", key=f"{kr}_correo")
 
-                    nombre_caja_in, precio_caja_in = "", 0.0
-                    if "EMP" in tipo_registro:
-                        st.markdown("---")
-                        st.markdown("💼 **Configuración de Caja para Emprendedor:**")
-                        nombre_caja_in, precio_caja_in = selector_talla_caja("reg_caja")
+                st.markdown("📍 **Dirección:**")
+                prov_in, canton_in, distrito_in, senas_in = selector_ubicacion(kr)
 
-                    btn_guardar_cli = st.form_submit_button("Guardar Registro")
+                nombre_caja_in, precio_caja_in, envio_in = "", 0.0, None
+                if "EMP" in tipo_registro:
+                    st.markdown("---")
+                    st.markdown("🚚 **Envío de las cajas:**")
+                    envio_in = selector_envio(f"{kr}_envio")
+                    st.markdown("💼 **Configuración de Caja para Emprendedor:**")
+                    nombre_caja_in, precio_caja_in = selector_talla_caja(f"{kr}_caja")
 
-                    if btn_guardar_cli:
-                        if nombre.strip():
-                            nombre_clean = nombre.strip().title()
-                            c.execute("INSERT OR REPLACE INTO clientes (id_cliente, nombre, telefono, correo) VALUES (?, ?, ?, ?)", (nuevo_id, nombre_clean, tel, correo))
-                        
-                            if "EMP" in tipo_registro:
-                                caja_clean = nombre_caja_in or "Caja Asignada"
-                                c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)", (nuevo_id, caja_clean, precio_caja_in))
-
-                            conn.commit()
-                            flash("success", f"¡Registro de {nombre_clean} guardado exitosamente ({nuevo_id})!")
-                            st.rerun()
-                        else:
-                            st.error("Debes ingresar el nombre del cliente.")
+                if st.button("Guardar Registro", key=f"{kr}_guardar"):
+                    faltan = []
+                    if not nombre.strip():
+                        faltan.append("el nombre")
+                    if not prov_in:
+                        faltan.append("la provincia")
+                    if not canton_in:
+                        faltan.append("el cantón")
+                    if not distrito_in:
+                        faltan.append("el distrito")
+                    if faltan:
+                        st.error("Falta completar: " + ", ".join(faltan) + ".")
+                    else:
+                        nombre_clean = nombre.strip().title()
+                        c.execute("INSERT OR REPLACE INTO clientes (id_cliente, nombre, telefono, correo, provincia, canton, distrito, senas, metodo_envio) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                  (nuevo_id, nombre_clean, tel.strip(), correo.strip(), prov_in, canton_in, distrito_in, senas_in, envio_in))
+                        if "EMP" in tipo_registro:
+                            caja_clean = nombre_caja_in or "Caja Asignada"
+                            c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)", (nuevo_id, caja_clean, precio_caja_in))
+                        conn.commit()
+                        st.session_state["reg_cli_n"] = n_reg + 1
+                        flash("success", f"¡Registro de {nombre_clean} guardado exitosamente ({nuevo_id})!")
+                        st.rerun()
 
             with card():
                 st.markdown("<h4 style='color:#be185d;'>📋 Directorio de Clientes y Emprendedores</h4>", unsafe_allow_html=True)
             
                 clientas_todas = pd.read_sql("""
-                    SELECT c.id_cliente as Código, c.nombre as Nombre, c.telefono as Teléfono, 
+                    SELECT c.id_cliente as Código, c.nombre as Nombre, c.telefono as Teléfono,
+                           c.provincia as _prov, c.canton as _cant, c.distrito as _dist,
+                           COALESCE(c.metodo_envio, '—') as 'Envío',
                            COALESCE(e.nombre_caja, 'N/A') as 'Caja', COALESCE(e.precio_caja, 0.0) as 'Precio Caja (₡)'
                     FROM clientes c 
                     LEFT JOIN cajas_emprendedores e ON c.id_cliente = e.id_cliente 
                     ORDER BY c.id_cliente DESC""", conn)
+                clientas_todas.insert(3, "Ubicación", [texto_ubicacion(a_, b_, c_) or "— sin dirección —"
+                                                       for a_, b_, c_ in zip(clientas_todas["_prov"], clientas_todas["_cant"], clientas_todas["_dist"])])
+                clientas_todas = clientas_todas.drop(columns=["_prov", "_cant", "_dist"])
             
                 id_cli_exp = None
                 if not clientas_todas.empty:
@@ -1749,7 +2218,7 @@ elif st.session_state.user_role == "admin":
                     st.markdown("<h5 style='color:#be185d;'>🔍 Expediente del Cliente Seleccionado</h5>", unsafe_allow_html=True)
 
                     if id_cli_exp:
-                        c.execute("SELECT nombre, telefono, correo FROM clientes WHERE id_cliente = ?", (id_cli_exp,))
+                        c.execute("SELECT nombre, telefono, correo, provincia, canton, distrito, senas, metodo_envio FROM clientes WHERE id_cliente = ?", (id_cli_exp,))
                         info_cli = c.fetchone()
 
                         c.execute("SELECT nombre_caja, precio_caja FROM cajas_emprendedores WHERE id_cliente = ?", (id_cli_exp,))
@@ -1769,6 +2238,24 @@ elif st.session_state.user_role == "admin":
                             col_m1.metric("Total Cargos", f"₡{tot_comp:,.0f}")
                             col_m2.metric("Total Abonado", f"₡{tot_ab:,.0f}")
                             col_m3.metric("Saldo Pendiente", f"₡{max(0.0, saldo_p):,.0f}")
+
+                            st.write("")
+                            with card("sub"):
+                                st.markdown("📍 **Dirección y envío:**")
+                                _dir_actual = {"provincia": info_cli[3], "canton": info_cli[4], "distrito": info_cli[5], "senas": info_cli[6]}
+                                ed_prov, ed_canton, ed_distrito, ed_senas = selector_ubicacion(f"exp_dir_{id_cli_exp}", _dir_actual)
+                                ed_envio = None
+                                if id_cli_exp.startswith("EMP-"):
+                                    ed_envio = selector_envio(f"exp_env_{id_cli_exp}", info_cli[7])
+                                if st.button("💾 Guardar dirección y envío", key=f"btn_dir_{id_cli_exp}"):
+                                    if not (ed_prov and ed_canton and ed_distrito):
+                                        st.error("Completa provincia, cantón y distrito.")
+                                    else:
+                                        c.execute("UPDATE clientes SET provincia=?, canton=?, distrito=?, senas=?, metodo_envio=? WHERE id_cliente=?",
+                                                  (ed_prov, ed_canton, ed_distrito, ed_senas, ed_envio, id_cli_exp))
+                                        conn.commit()
+                                        flash("success", "¡Dirección y envío actualizados!")
+                                        st.rerun()
 
                             if id_cli_exp.startswith("EMP-"):
                                 st.write("")
@@ -1795,6 +2282,7 @@ elif st.session_state.user_role == "admin":
                                     )
                             if link_wa:
                                 st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Mensaje por WhatsApp</a>', unsafe_allow_html=True)
+                            mostrar_ticket(id_cli_exp, "exp", con_checkbox=True)
 
                             st.divider()
                             st.markdown("**📦 Pedidos / Artículos comprados:**")
@@ -1990,6 +2478,7 @@ elif st.session_state.user_role == "admin":
                                 )
                         if link_wa:
                             st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Mensaje por WhatsApp</a>', unsafe_allow_html=True)
+                        mostrar_ticket(id_c, "abono")
 
             with card():
                 st.markdown("<h4 style='color:#be185d;'>📋 Historial de Abonos Recibidos</h4>", unsafe_allow_html=True)
@@ -2219,6 +2708,7 @@ elif st.session_state.user_role == "admin":
                                     )
                             if link_wa:
                                 st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Comprobante por WhatsApp</a>', unsafe_allow_html=True)
+                            mostrar_ticket(id_cli_final, "pos")
                     else:
                         st.error("Ingresa o selecciona un producto válido para realizar la venta.")
 

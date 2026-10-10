@@ -17,6 +17,9 @@ import tempfile
 import base64
 import hmac
 import secrets
+import threading
+import time
+import shutil
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -47,6 +50,7 @@ st.set_page_config(
 DB_FILE = "minici_store.db"
 GH_RUTA_ZIP = "respaldos/respaldo_completo.zip"
 GH_RUTA_DB = "respaldos/minici_store.db"
+_ESTADO_FILE = "respaldo_estado.json"
 
 
 def _secret(nombre, default=None):
@@ -58,19 +62,24 @@ def _secret(nombre, default=None):
         return default
 
 
+_GH_CACHE = {}
+
+
 def _gh_config():
     token, repo = _secret("GITHUB_TOKEN"), _secret("GITHUB_REPO")
     if not token or not repo:
-        return None
+        return _GH_CACHE.get("cfg")  # un hilo en segundo plano puede no ver los Secrets: usa lo ya leído
     repo = str(repo).strip().strip("/")
     for prefijo in ("https://github.com/", "http://github.com/", "github.com/"):
         if repo.lower().startswith(prefijo):
             repo = repo[len(prefijo):]
     if repo.lower().endswith(".git"):
         repo = repo[:-4]
-    return {"token": str(token).strip().strip('"').strip("'"),
-            "repo": repo.strip("/"),
-            "branch": str(_secret("GITHUB_BRANCH", "main")).strip()}
+    cfg = {"token": str(token).strip().strip('"').strip("'"),
+           "repo": repo.strip("/"),
+           "branch": str(_secret("GITHUB_BRANCH", "main")).strip()}
+    _GH_CACHE["cfg"] = cfg
+    return cfg
 
 
 def _gh_request(method, url, token, payload=None, raw=False):
@@ -194,31 +203,84 @@ def _extraer_fotos_zip(z):
                 f.write(z.read(nombre))
 
 
-def _restaurar_al_iniciar():
-    """Si el servidor se reinició y la base de datos desapareció, la recupera del último respaldo en GitHub."""
-    if os.path.exists(DB_FILE) or not _gh_config():
-        return False
+def _filas_en_bd(ruta):
+    """Cantidad de registros importantes (clientes + productos + abonos) de un archivo de base de datos."""
+    total = 0
     try:
-        datos = github_leer(GH_RUTA_ZIP)
-        with zipfile.ZipFile(io.BytesIO(datos)) as z:
-            if DB_FILE in z.namelist():
-                with open(DB_FILE, "wb") as f:
-                    f.write(z.read(DB_FILE))
-                _extraer_fotos_zip(z)
-                return True
+        cx = sqlite3.connect(ruta)
+        try:
+            for tabla in ("clientes", "productos", "abonos"):
+                try:
+                    total += cx.execute(f"SELECT COUNT(*) FROM {tabla}").fetchone()[0]
+                except Exception:
+                    pass
+        finally:
+            cx.close()
+    except Exception:
+        pass
+    return total
+
+
+def _restaurar_al_iniciar():
+    """Recupera los datos de GitHub cuando el servidor arrancó de cero.
+    - Si no hay base de datos: usa la del respaldo.
+    - Si hay una base pero este servidor nunca ha respaldado (típico cuando la base viene dentro del
+      repositorio y está desactualizada): usa la del respaldo si tiene más datos, y guarda una copia de la otra."""
+    if not _gh_config():
+        return False
+    hay_local = os.path.exists(DB_FILE)
+    if hay_local and os.path.exists(_ESTADO_FILE):
+        return False  # este servidor ya viene trabajando con respaldos: la base local es la vigente
+    bd, zdatos = None, None
+    try:
+        bd = github_leer(GH_RUTA_DB)
     except Exception:
         pass
     try:
-        datos = github_leer(GH_RUTA_DB)
+        zdatos = github_leer(GH_RUTA_ZIP)
+    except Exception:
+        pass
+    if bd is None and zdatos:
+        try:
+            with zipfile.ZipFile(io.BytesIO(zdatos)) as z:
+                if DB_FILE in z.namelist():
+                    bd = z.read(DB_FILE)
+        except Exception:
+            bd = None
+    if bd is None:
+        return False
+    try:
+        if hay_local:
+            tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+            tmp.write(bd)
+            tmp.close()
+            try:
+                filas_respaldo = _filas_en_bd(tmp.name)
+            finally:
+                os.unlink(tmp.name)
+            if _filas_en_bd(DB_FILE) >= filas_respaldo:
+                return False  # la base local tiene igual o más datos: no se toca
+            shutil.copy2(DB_FILE, "minici_store.antes_de_restaurar.db")
         with open(DB_FILE, "wb") as f:
-            f.write(datos)
+            f.write(bd)
+        if zdatos:
+            with zipfile.ZipFile(io.BytesIO(zdatos)) as z:
+                _extraer_fotos_zip(z)
         return True
     except Exception:
         return False
 
 
-if _restaurar_al_iniciar():
+@st.cache_resource
+def _restaurar_una_vez():
+    """Se ejecuta una sola vez por arranque del servidor (no en cada recarga de pantalla)."""
+    return _restaurar_al_iniciar()
+
+
+_gh_config()  # deja lista la configuración de GitHub para el respaldo automático
+if _restaurar_una_vez() and not st.session_state.get("_rest_avisado"):
     st.session_state["_restaurado_gh"] = True
+    st.session_state["_rest_avisado"] = True
 
 # -------------------------------------------------------------
 # 2. BASE DE DATOS SQLITE Y MIGRACIONES AUTOMÁTICAS
@@ -346,19 +408,25 @@ def mostrar_flash():
         getattr(st, f[0], st.info)(f[1])
 
 
-def crear_respaldo_zip():
-    """Zip con la base de datos, todas las fotos y un Excel legible. Devuelve (zip, db)."""
-    conn.commit()
+def _copiar_bd(cx):
+    """Copia consistente de la base de datos (bytes), aunque otra persona esté guardando."""
+    cx.commit()
     tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     tmp.close()
     try:
         destino = sqlite3.connect(tmp.name)
-        conn.backup(destino)
+        cx.backup(destino)
         destino.close()
         with open(tmp.name, "rb") as f:
-            db_bytes = f.read()
+            return f.read()
     finally:
         os.unlink(tmp.name)
+
+
+def crear_respaldo_zip(con=None):
+    """Zip con la base de datos, todas las fotos y un Excel legible. Devuelve (zip, db)."""
+    cx = conn if con is None else con
+    db_bytes = _copiar_bd(cx)
 
     xlsx_bytes = None
     try:
@@ -368,7 +436,7 @@ def crear_respaldo_zip():
                                 ("productos", "Productos"), ("abonos", "Abonos"),
                                 ("gastos", "Gastos"), ("ventas_rapidas", "Ventas POS"),
                                 ("notificaciones", "Notificaciones")]:
-                pd.read_sql(f"SELECT * FROM {tabla}", conn).to_excel(w, sheet_name=hoja, index=False)
+                pd.read_sql(f"SELECT * FROM {tabla}", cx).to_excel(w, sheet_name=hoja, index=False)
         xlsx_bytes = buf.getvalue()
     except Exception:
         pass
@@ -386,21 +454,143 @@ def crear_respaldo_zip():
     return zbuf.getvalue(), db_bytes
 
 
-def hacer_respaldo():
-    zip_bytes, db_bytes = crear_respaldo_zip()
+# ---------- estado del respaldo (archivo aparte, para no alterar la base de datos) ----------
+INTERVALO_RESPALDO_SEG = 10 * 60          # como máximo cada 10 minutos (solo si hubo cambios)
+REINTENTO_RESPALDO_SEG = 5 * 60           # si falla, reintenta a los 5 minutos
+RESPALDO_ZIP_CADA_SEG = 24 * 60 * 60      # el zip con fotos se sube como máximo 1 vez al día (o si hay fotos nuevas)
+
+
+def _leer_estado():
+    try:
+        with open(_ESTADO_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _guardar_estado(**cambios):
+    try:
+        est = _leer_estado()
+        est.update(cambios)
+        tmp = _ESTADO_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(est, f)
+        os.replace(tmp, _ESTADO_FILE)
+    except Exception:
+        pass
+
+
+def _mtime_fotos():
+    ms = [0.0]
+    if os.path.isdir("fotos_productos"):
+        for nombre in os.listdir("fotos_productos"):
+            try:
+                ms.append(os.path.getmtime(os.path.join("fotos_productos", nombre)))
+            except OSError:
+                pass
+    return max(ms)
+
+
+def _ultimo_cambio():
+    base = os.path.getmtime(DB_FILE) if os.path.exists(DB_FILE) else 0.0
+    return max(base, _mtime_fotos())
+
+
+def hacer_respaldo(origen="manual", con=None, solo_bd=False):
+    cx = conn if con is None else con
+    inicio = time.time()
     ahora = datetime.now()
+    if solo_bd:
+        db_bytes, zip_bytes = _copiar_bd(cx), None
+    else:
+        zip_bytes, db_bytes = crear_respaldo_zip(cx)
     res = {"zip": zip_bytes, "nombre": f"respaldo_minici_{ahora:%Y-%m-%d_%H%M}.zip",
-           "hora": ahora.strftime("%d/%m/%Y %H:%M"), "github": None, "detalle": ""}
+           "hora": ahora.strftime("%d/%m/%Y %H:%M"), "github": None, "detalle": "", "origen": origen}
     if _gh_config():
-        msg = f"Respaldo Minici Store {ahora:%Y-%m-%d %H:%M}"
+        msg = f"Respaldo {origen} Minici Store {ahora:%Y-%m-%d %H:%M}"
         ok_db, m_db = github_subir(GH_RUTA_DB, db_bytes, msg)
-        if len(zip_bytes) < 90 * 1024 * 1024:
-            ok_zip, m_zip = github_subir(GH_RUTA_ZIP, zip_bytes, msg)
-        else:
-            ok_zip, m_zip = False, "El respaldo con fotos pesa más de 90 MB; solo se subió la base de datos."
+        ok_zip, m_zip = True, ""
+        if zip_bytes is not None:
+            if len(zip_bytes) < 90 * 1024 * 1024:
+                ok_zip, m_zip = github_subir(GH_RUTA_ZIP, zip_bytes, msg)
+            else:
+                ok_zip, m_zip = False, "El respaldo con fotos pesa más de 90 MB; solo se subió la base de datos."
         res["github"] = bool(ok_db and ok_zip)
         res["detalle"] = "" if res["github"] else (m_db if not ok_db else m_zip)
+        if res["github"]:
+            cambios = {"epoch_ok": inicio, "txt_ok": res["hora"], "origen": origen, "error": None,
+                       "epoch_intento": time.time()}
+            if zip_bytes is not None:
+                cambios["epoch_zip"] = inicio
+            _guardar_estado(**cambios)
+        else:
+            _guardar_estado(error=res["detalle"] or "Error desconocido", epoch_intento=time.time())
     return res
+
+
+def _respaldo_auto_si_toca():
+    """Hace el respaldo automático si ya pasaron 2 horas, hubo cambios y la base no está vacía."""
+    if not _gh_config() or not os.path.exists(DB_FILE):
+        return False
+    est = _leer_estado()
+    ahora = time.time()
+    ok = est.get("epoch_ok")
+    if ok and ahora - ok < INTERVALO_RESPALDO_SEG:
+        return False
+    if est.get("error") and ahora - est.get("epoch_intento", 0) < REINTENTO_RESPALDO_SEG:
+        return False
+    if ok and _ultimo_cambio() <= ok:
+        return False  # nada cambió desde el último respaldo
+    con = sqlite3.connect(DB_FILE, timeout=30)
+    try:
+        total = con.execute("SELECT (SELECT COUNT(*) FROM clientes) + (SELECT COUNT(*) FROM productos)").fetchone()[0]
+        if not total:
+            return False  # nunca reemplazar un buen respaldo con una base vacía
+        ez = est.get("epoch_zip")
+        con_zip = (not ez) or (ahora - ez >= RESPALDO_ZIP_CADA_SEG) or (_mtime_fotos() > ez)
+        hacer_respaldo(origen="automático", con=con, solo_bd=not con_zip)
+        return True
+    except Exception as e:
+        _guardar_estado(error=f"{e}", epoch_intento=time.time())
+        return False
+    finally:
+        con.close()
+
+
+def _bucle_respaldo_auto():
+    time.sleep(60)  # deja que la app termine de arrancar
+    while True:
+        try:
+            _respaldo_auto_si_toca()
+        except Exception:
+            pass
+        time.sleep(300)
+
+
+@st.cache_resource
+def _iniciar_respaldo_automatico():
+    if any(t.name == "respaldo-auto" and t.is_alive() for t in threading.enumerate()):
+        return None
+    _gh_config()
+    hilo = threading.Thread(target=_bucle_respaldo_auto, name="respaldo-auto", daemon=True)
+    hilo.start()
+    return hilo
+
+
+def estado_respaldo_auto():
+    """(tipo, texto) para mostrar arriba en el panel."""
+    if not _gh_config():
+        return "off", "🕒 Respaldo automático: apagado (falta conectar GitHub). Los datos se pierden si la app se reinicia."
+    est = _leer_estado()
+    ok, intento = est.get("epoch_ok"), est.get("epoch_intento", 0)
+    if est.get("error") and (not ok or intento > ok):
+        return "error", f"⚠️ El último intento de respaldo falló y se reintenta solo: {str(est['error'])[:150]}"
+    if ok:
+        return "ok", f"🕒 Respaldo automático activo (cada 10 min si hay cambios) · último guardado: {est.get('txt_ok', '')} ({est.get('origen', 'manual')})"
+    return "espera", "🕒 Respaldo automático activo (cada 10 min si hay cambios). El primero se hará en unos minutos."
+
+
+_iniciar_respaldo_automatico()
 
 
 def restaurar_respaldo(datos):
@@ -1945,6 +2135,7 @@ elif st.session_state.user_role == "admin":
             st.session_state.user_role = None
             st.rerun()
 
+    st.caption(estado_respaldo_auto()[1])
     mostrar_flash()
     if st.session_state.pop("_restaurado_gh", False):
         st.info("♻️ El servidor se había reiniciado: tus datos se recuperaron automáticamente del último respaldo de GitHub.")

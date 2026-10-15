@@ -1120,12 +1120,13 @@ _TICKET_PLANTILLA = """<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>%%TITULO%%</title>
-<style id="pg">@page { margin: 2mm; }</style>
+<style id="pg">@page { size: 80mm 200mm; margin: 0; }</style>
 <style>
   html, body { margin: 0; padding: 0; background: #f3f4f6; }
   .bar { text-align: center; padding: 10px 8px 4px; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 14px; color: #4a2c3b; }
   .bar select { font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid #F3B2C9; margin-right: 8px; }
   .bar button { background: #BE185D; color: #fff; border: 0; border-radius: 999px; padding: 11px 22px; font-size: 15px; font-weight: 700; cursor: pointer; }
+  .tip { text-align: center; font: 12px system-ui, sans-serif; color: #7C6572; padding: 2px 10px 0; }
   #t { width: 72mm; margin: 10px auto 22px; padding: 4mm 3mm 8mm; background: #fff; color: #000;
        font-family: 'Courier New', Courier, 'Liberation Mono', monospace; font-size: 12.5px; line-height: 1.38;
        box-shadow: 0 1px 8px rgba(0,0,0,.25); box-sizing: border-box; }
@@ -1141,27 +1142,51 @@ _TICKET_PLANTILLA = """<!DOCTYPE html>
   .it { margin-bottom: 5px; } .it .d { font-weight: 700; word-break: break-word; }
   .big { font-size: 1.3em; font-weight: 700; }
   .dim { opacity: .85; }
+  /* Diseño de impresión: el ticket ocupa exactamente el ancho del rollo (la clase se usa también para medir su alto) */
+  body.imprimiendo { background: #fff; }
+  body.imprimiendo .bar, body.imprimiendo .tip { display: none !important; }
+  body.imprimiendo #t { width: var(--pw, 80mm) !important; margin: 0 !important; padding: 3mm var(--pad, 4mm) 6mm !important; box-shadow: none !important; }
   @media print {
     html, body { background: #fff; }
-    .bar { display: none !important; }
-    #t { width: auto !important; margin: 0 !important; padding: 0 0 8mm !important; box-shadow: none !important; }
+    .bar, .tip { display: none !important; }
+    #t { width: var(--pw, 80mm) !important; margin: 0 !important; padding: 3mm var(--pad, 4mm) 6mm !important; box-shadow: none !important; }
   }
 </style></head>
 <body>
 <div class="bar">
-  <label>Papel: <select id="papel"><option value="80">80 mm (estándar)</option><option value="58">58 mm (pequeño)</option></select></label>
+  <label>Papel del rollo: <select id="papel"><option value="80">80 mm (estándar)</option><option value="58">58 mm (pequeño)</option></select></label>
   <button onclick="imprimir()">🖨️ Imprimir ticket</button>
 </div>
+<div class="tip">En la ventana de impresión elige tu impresora del rollo y deja los márgenes en «Ninguno».</div>
 <div id="t">%%CUERPO%%</div>
 <script>
-  function aplicar() {
-    var mm = parseInt(document.getElementById('papel').value, 10);
-    var t = document.getElementById('t');
-    t.style.width = (mm - 8) + 'mm';
+  function ancho() { return parseInt(document.getElementById('papel').value, 10) || 80; }
+  // Mide el ticket con el ancho real del papel y le dice al navegador el tamaño exacto de la hoja (ancho del rollo x largo del ticket),
+  // para que no use hoja carta ni parta el ticket en varias hojas.
+  function calcularPagina() {
+    var mm = ancho(), root = document.documentElement, t = document.getElementById('t');
+    root.style.setProperty('--pw', mm + 'mm');
+    root.style.setProperty('--pad', (mm < 70 ? 3 : 4) + 'mm');
     t.className = mm < 70 ? 'p58' : '';
+    t.style.width = (mm - 8) + 'mm';
+    document.body.classList.add('imprimiendo');
+    var px = t.getBoundingClientRect().height;
+    document.body.classList.remove('imprimiendo');
+    var alto = Math.ceil(px * 25.4 / 96) + 4;
+    document.getElementById('pg').textContent = '@page { size: ' + mm + 'mm ' + alto + 'mm; margin: 0; }';
   }
-  function imprimir() { aplicar(); setTimeout(function () { window.print(); }, 80); }
-  document.getElementById('papel').addEventListener('change', aplicar);
+  function imprimir() {
+    try { localStorage.setItem('minici_papel', String(ancho())); } catch (e) {}
+    calcularPagina();
+    setTimeout(function () { window.print(); }, 120);
+  }
+  document.getElementById('papel').addEventListener('change', function () {
+    try { localStorage.setItem('minici_papel', String(ancho())); } catch (e) {}
+    calcularPagina();
+  });
+  try { var g = localStorage.getItem('minici_papel'); if (g === '58' || g === '80') document.getElementById('papel').value = g; } catch (e) {}
+  calcularPagina();
+  window.addEventListener('load', calcularPagina);
 </script>
 </body></html>"""
 
@@ -1250,7 +1275,7 @@ def preparar_documento(doc):
             "link": _link_wa(doc.get("telefono"), doc.get("mensaje", "")) if doc.get("telefono") else None}
 
 
-def mostrar_documento(info, key):
+def mostrar_documento(info, key, expandido=False):
     """Muestra un comprobante: descargar imagen, WhatsApp e impresión de ticket."""
     import streamlit.components.v1 as components
     if not info:
@@ -1262,8 +1287,8 @@ def mostrar_documento(info, key):
                                mime="image/jpeg", key=f"dl_img_{key}")
     if info.get("link"):
         st.markdown(f'<a href="{info["link"]}" target="_blank" class="btn-whatsapp">📲 Enviar por WhatsApp</a>', unsafe_allow_html=True)
-    with st.expander("🖨️ Ticket para imprimir (estilo supermercado)", expanded=False):
-        st.caption("Toca «Imprimir ticket», elige tu impresora (80 mm o 58 mm) y deja los márgenes en «ninguno».")
+    with st.expander("🖨️ Ticket para imprimir (estilo supermercado)", expanded=expandido):
+        st.caption("Toca «Imprimir ticket» y elige tu impresora del rollo: el ticket sale con el tamaño del rollo (80 mm o 58 mm), no en hoja carta.")
         components.html(info["ticket"], height=info["alto"], scrolling=True)
         st.download_button("⬇️ Descargar ticket (se abre en el navegador para imprimir)", data=info["ticket"].encode("utf-8"),
                            file_name=f"Ticket_{info['ref']}.html", mime="text/html", key=f"dl_tk_{key}")
@@ -1306,7 +1331,7 @@ def politica_apartado():
             return float(cfg_get(clave, defecto))
         except Exception:
             return float(defecto)
-    return {"prima_pct": num("apartado_prima_pct", 20), "plazo_dias": int(num("apartado_plazo_dias", 30)),
+    return {"prima_pct": num("apartado_prima_pct", 0), "plazo_dias": int(num("apartado_plazo_dias", 30)),
             "cancel_pct": num("apartado_cancel_pct", 10)}
 
 
@@ -1428,11 +1453,11 @@ def crear_apartado(carrito, id_cliente, dias_plazo, prima, metodo, referencia=""
         return None, "El carrito está vacío."
     if not id_cliente:
         return None, "Un apartado necesita una clienta registrada."
-    if metodo not in METODOS_PAGO:
-        return None, "Elige el método de pago de la prima."
     pol = politica_apartado()
     total = _total_carrito(carrito)
     prima = float(prima or 0)
+    if prima > 0 and metodo not in METODOS_PAGO:
+        return None, "Elige el método de pago de la prima."
     prima_min = _arriba(total * pol["prima_pct"] / 100.0)
     if prima + 0.001 < prima_min:
         return None, f"La prima mínima es ₡{prima_min:,.0f} ({pol['prima_pct']:g}% del total)."
@@ -1730,6 +1755,10 @@ _HTML_ESCANER = r'''<!DOCTYPE html>
 const $ = (id) => document.getElementById(id);
 const video = $("v"), wrap = $("wrap"), msg = $("msg");
 let stream = null, running = false, timer = null, nativeDet = null;
+let modo = "una_vez";                       // "una_vez" (inventario) o "continuo" (POS: varias lecturas seguidas)
+const sid = Math.random().toString(36).slice(2, 10);
+let seq = 0, contador = 0, lastCode = null, lastT = 0;
+const lecturas = [];
 
 function post(type, data) {
   window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data || {}), "*");
@@ -1738,7 +1767,10 @@ function fit() { post("streamlit:setFrameHeight", { height: Math.ceil(document.d
 function emit(code) { post("streamlit:setComponentValue", { value: { code: String(code), ts: Date.now() }, dataType: "json" }); }
 function say(t, cls) { msg.textContent = t; msg.className = cls || ""; fit(); }
 
-window.addEventListener("message", () => {});
+window.addEventListener("message", (ev) => {
+  const d = ev.data;
+  if (d && d.type === "streamlit:render" && d.args && d.args.modo) { modo = d.args.modo; }
+});
 post("streamlit:componentReady", { apiVersion: 1 });
 new ResizeObserver(fit).observe(document.body);
 setTimeout(fit, 50);
@@ -1793,6 +1825,30 @@ function stopCam() {
   fit();
 }
 
+function emitLectura(code) {
+  seq += 1;
+  lecturas.push({ seq: seq, code: String(code), ts: Date.now() });
+  if (lecturas.length > 50) lecturas.shift();
+  post("streamlit:setComponentValue", { value: { sid: sid, scans: lecturas }, dataType: "json" });
+}
+// Devuelve true si hay que seguir escaneando (modo continuo) y false si ya terminó (modo una vez).
+function onCode(code) {
+  if (modo === "continuo") {
+    const now = Date.now();
+    const repetido = (code === lastCode && now - lastT < 2500);   // mismo código seguido = misma lectura
+    lastCode = code; lastT = now;
+    if (!repetido) {
+      try { if (navigator.vibrate) navigator.vibrate(120); } catch (e) {}
+      contador += 1;
+      emitLectura(code);
+      say("✅ " + code + "  ·  escaneados: " + contador, "ok");
+    }
+    return true;
+  }
+  found(code);
+  return false;
+}
+
 function found(code) {
   stopCam();
   try { if (navigator.vibrate) navigator.vibrate(150); } catch (e) {}
@@ -1805,7 +1861,7 @@ function loopNative() {
     if (!running) return;
     try {
       const r = await nativeDet.detect(video);
-      if (r && r.length) { found(r[0].rawValue); return; }
+      if (r && r.length) { if (!onCode(r[0].rawValue)) return; }
     } catch (e) {}
     timer = setTimeout(tick, 120);
   };
@@ -1827,7 +1883,7 @@ function loopZXing() {
       const sx = Math.floor((vw - cw) / 2), sy = Math.floor((vh - ch) / 2);
       canvas.width = cw; canvas.height = ch;
       ctx.drawImage(video, sx, sy, cw, ch, 0, 0, cw, ch);
-      try { const t = zxingDecodeCanvas(reader, canvas); if (t) { found(t); return; } } catch (e) {}
+      try { const t = zxingDecodeCanvas(reader, canvas); if (t) { if (!onCode(t)) return; } } catch (e) {}
     }
     timer = setTimeout(tick, 100);
   };
@@ -1908,7 +1964,7 @@ $("foto").addEventListener("change", async (ev) => {
   say("Leyendo la foto…");
   try {
     const code = await decodeFile(f);
-    if (code) found(code);
+    if (code) onCode(code);
     else say("⚠️ No se detectó ningún código en la foto. Acércate más, con buena luz y bien enfocado.", "err");
   } catch (e) {
     say("⚠️ No se pudo leer la foto (" + (e.message || e) + ").", "err");
@@ -2462,10 +2518,128 @@ def _opciones_clientes():
     return df, dict(zip(df["display"], df["id_cliente"]))
 
 
+def _siguiente_uid():
+    st.session_state["pos_uid"] = st.session_state.get("pos_uid", 0) + 1
+    return st.session_state["pos_uid"]
+
+
+def _nueva_linea(id_prod, desc, cant, precio, origen):
+    return {"uid": _siguiente_uid(), "id_prod": id_prod, "desc": desc, "cant": int(cant), "precio": float(precio), "origen": origen}
+
+
+def _normalizar_codigo(codigo):
+    """Quita espacios y ceros a la izquierda (así un UPC-A y su versión EAN-13 coinciden)."""
+    return "".join(str(codigo or "").split()).lstrip("0").upper()
+
+
+def _productos_por_codigo(codigo):
+    buscado = _normalizar_codigo(codigo)
+    if not buscado:
+        return []
+    filas = c.execute("SELECT id, descripcion, precio, cantidad, codigo_barras FROM productos "
+                      "WHERE (id_cliente IS NULL OR id_cliente = '') AND codigo_barras IS NOT NULL AND TRIM(codigo_barras) <> ''").fetchall()
+    return [f for f in filas if _normalizar_codigo(f[4]) == buscado]
+
+
+def _registrar_scan(estado, mensaje):
+    log = st.session_state.setdefault("pos_scan_log", [])
+    log.append((estado, mensaje))
+    del log[:-8]
+
+
+def pos_agregar_por_codigo(codigo, directo=True):
+    """Procesa un código de barras leído en el POS. Devuelve (estado, mensaje).
+    estado: 'ok' (añadido), 'seleccionado' (listo para revisar), 'sin_stock' o 'no_existe'."""
+    carrito = st.session_state.setdefault("pos_cart", [])
+    candidatos = _productos_por_codigo(codigo)
+    if not candidatos:
+        return "no_existe", f"El código {codigo} no está en el inventario. Agrégalo como producto express o regístralo en Inventario."
+    en_carrito = {}
+    for it in carrito:
+        if it.get("id_prod"):
+            en_carrito[it["id_prod"]] = en_carrito.get(it["id_prod"], 0) + it["cant"]
+    elegido = next((f for f in candidatos if int(f[3] or 0) - en_carrito.get(f[0], 0) > 0), None)
+    if elegido is None:
+        return "sin_stock", f"«{candidatos[0][1]}» no tiene existencias disponibles."
+    id_prod, desc, precio = elegido[0], elegido[1], float(elegido[2] or 0.0)
+    if not directo:
+        st.session_state["pos_sel_producto"] = id_prod
+        return "seleccionado", f"«{desc}» (₡{precio:,.0f}) quedó seleccionado abajo para que lo revises y lo agregues."
+    existente = next((i for i in carrito if i.get("id_prod") == id_prod), None)
+    if existente:
+        existente["cant"] += 1
+        if existente.get("uid"):
+            st.session_state[f"cart_qty_{existente['uid']}"] = existente["cant"]
+        cant = existente["cant"]
+    else:
+        carrito.append(_nueva_linea(id_prod, desc, 1, precio, "Del Stock General"))
+        cant = 1
+    return "ok", f"{desc} añadido (×{cant} en el carrito)."
+
+
+def _pos_cb_scan():
+    """Se ejecuta cuando la pistola lectora (o el teclado) envía un código + Enter."""
+    codigo = str(st.session_state.get("pos_scan_in", "")).strip()
+    st.session_state["pos_scan_in"] = ""
+    if not codigo:
+        return
+    estado, msg = pos_agregar_por_codigo(codigo, st.session_state.get("pos_scan_directo", True))
+    _registrar_scan(estado, msg)
+
+
+def _pos_procesar_camara(res):
+    """Procesa las lecturas nuevas de la cámara (puede haber varias seguidas)."""
+    if not isinstance(res, dict):
+        return
+    sid, lecturas = res.get("sid"), res.get("scans") or []
+    ultimo = st.session_state.get("pos_cam_ultimo")
+    ult_seq = ultimo[1] if ultimo and ultimo[0] == sid else 0
+    nuevas = sorted([x for x in lecturas if x.get("seq", 0) > ult_seq], key=lambda x: x["seq"])
+    for x in nuevas:
+        estado, msg = pos_agregar_por_codigo(str(x.get("code", "")), st.session_state.get("pos_scan_directo", True))
+        _registrar_scan(estado, msg)
+    if nuevas:
+        st.session_state["pos_cam_ultimo"] = (sid, nuevas[-1]["seq"])
+
+
+def _enfocar_campo_scan():
+    """Deja el cursor en el campo del lector para poder seguir escaneando sin tocar la pantalla."""
+    import streamlit.components.v1 as components
+    components.html("""<script>
+      (function () { try {
+        var d = window.parent.document, a = d.activeElement;
+        var el = d.querySelector('input[aria-label="Escanear código de barras"]');
+        if (el && (!a || a === d.body || a === el || a.tagName === 'IFRAME')) { el.focus(); }
+      } catch (e) {} })();
+    </script>""", height=0)
+
+
+_ICONO_SCAN = {"ok": "✅", "seleccionado": "📝", "sin_stock": "⛔", "no_existe": "❓"}
+
+
 def ui_pos_nueva_venta():
     carrito = st.session_state.setdefault("pos_cart", [])
     n = st.session_state.get("pos_n", 0)
+    na = st.session_state.get("pos_add_n", 0)  # sube después de cada producto agregado: así los campos vuelven a su valor inicial
 
+    # ---------- Escanear ----------
+    with card():
+        st.markdown("<h4 style='color:#be185d;'>📷 Escanear productos</h4>", unsafe_allow_html=True)
+        st.checkbox("Añadir directo al carrito al escanear (si lo desactivas, el producto solo se selecciona abajo para revisarlo)",
+                    value=True, key="pos_scan_directo")
+        st.text_input("Escanear código de barras", placeholder="Pasa la pistola lectora (o escribe el código) y Enter",
+                      key="pos_scan_in", on_change=_pos_cb_scan)
+        _enfocar_campo_scan()
+        with st.expander("📷 Escanear con la cámara del celular o la computadora (varios seguidos)"):
+            st.caption("Abre la cámara y pasa un producto tras otro: cada código se añade solo. Para sumar otra unidad del mismo producto, apártalo un momento y vuelve a mostrarlo.")
+            if _scanner_component is None:
+                st.warning("No se pudo preparar el escáner de cámara. Usa la pistola lectora o escribe el código.")
+            else:
+                _pos_procesar_camara(_scanner_component(key="scanner_pos", default=None, modo="continuo"))
+        for estado, msg in reversed(st.session_state.get("pos_scan_log", [])[-4:]):
+            st.caption(f"{_ICONO_SCAN.get(estado, '•')} {msg}")
+
+    # ---------- Agregar a mano ----------
     with card():
         st.markdown("<h4 style='color:#be185d;'>🛒 Agregar productos</h4>", unsafe_allow_html=True)
         origen = st.radio("Tipo de producto:", ["Del Stock General", "Producto Express (No Registrado)"], horizontal=True, key="pos_origen")
@@ -2480,46 +2654,77 @@ def ui_pos_nueva_venta():
             if df.empty:
                 st.warning("⚠️ No hay productos disponibles en el Stock General (o ya están todos en el carrito).")
             else:
-                opciones = {f"{r['descripcion']} - ₡{(r['precio'] or 0.0):,.0f} (Disp.: {int(r['disp'])})": r for _, r in df.iterrows()}
-                sel = st.selectbox("Producto del stock:", list(opciones.keys()), key="pos_stock_sel")
-                r = opciones[sel]
-                cant = st.number_input("Cantidad:", min_value=1, max_value=int(r["disp"]), value=1, step=1, key="pos_cant_num")
+                filas = {int(r["id"]): r for _, r in df.iterrows()}
+                etiquetas = {i: f"{r['descripcion']} - ₡{(r['precio'] or 0.0):,.0f} (Disp.: {int(r['disp'])})" for i, r in filas.items()}
+                pre = st.session_state.pop("pos_sel_producto", None)   # lo deja el escáner cuando no se añade directo
+                if pre in filas:
+                    st.session_state[f"pos_stock_sel_{na}"] = pre
+                sel_id = st.selectbox("Producto del stock:", list(filas.keys()), format_func=lambda i: etiquetas[i], key=f"pos_stock_sel_{na}")
+                r = filas[sel_id]
+                c_a, c_b = st.columns(2)
+                with c_a:
+                    cant = st.number_input("Cantidad:", min_value=1, max_value=int(r["disp"]), value=1, step=1, key=f"pos_cant_{na}_{sel_id}")
+                with c_b:
+                    precio_u = st.number_input("Precio unitario (₡) — editable:", min_value=0.0, value=float(r["precio"] or 0.0), step=500.0,
+                                               key=f"pos_precio_{na}_{sel_id}")
                 if st.button("➕ Agregar al carrito", key="pos_add_stock"):
-                    existente = next((i for i in carrito if i.get("id_prod") == int(r["id"])), None)
+                    existente = next((i for i in carrito if i.get("id_prod") == int(sel_id)), None)
                     if existente:
                         existente["cant"] += int(cant)
+                        if existente.get("uid"):
+                            st.session_state[f"cart_qty_{existente['uid']}"] = existente["cant"]
                     else:
-                        carrito.append({"id_prod": int(r["id"]), "desc": r["descripcion"], "cant": int(cant),
-                                        "precio": float(r["precio"] or 0.0), "origen": "Del Stock General"})
+                        carrito.append(_nueva_linea(int(sel_id), r["descripcion"], cant, precio_u, "Del Stock General"))
+                    st.session_state["pos_add_n"] = na + 1
                     st.rerun()
         else:
-            desc = st.text_input("Descripción del producto:", value="Venta Express", key="pos_expr_desc")
-            precio = st.number_input("Precio unitario (₡):", min_value=0.0, value=1000.0, step=500.0, key="pos_expr_precio")
-            cant = st.number_input("Cantidad:", min_value=1, value=1, step=1, key="pos_expr_cant")
+            desc = st.text_input("Descripción del producto:", placeholder="Ej. Bolsa de regalo", key=f"pos_expr_desc_{na}")
+            precio = st.number_input("Precio unitario (₡):", min_value=0.0, value=0.0, step=500.0, key=f"pos_expr_precio_{na}")
+            cant = st.number_input("Cantidad:", min_value=1, value=1, step=1, key=f"pos_expr_cant_{na}")
             if st.button("➕ Agregar al carrito", key="pos_add_expr"):
                 if not desc.strip():
                     st.error("Escribe la descripción del producto.")
                 elif precio <= 0:
                     st.error("El precio debe ser mayor a 0.")
                 else:
-                    carrito.append({"id_prod": None, "desc": desc.strip(), "cant": int(cant), "precio": float(precio),
-                                    "origen": "Producto Express (No Registrado)"})
+                    carrito.append(_nueva_linea(None, desc.strip(), cant, precio, "Producto Express (No Registrado)"))
+                    st.session_state["pos_add_n"] = na + 1
                     st.rerun()
 
+    # ---------- Carrito (todo editable) ----------
     with card():
         st.markdown("<h4 style='color:#be185d;'>🧺 Carrito</h4>", unsafe_allow_html=True)
         if not carrito:
-            st.info("El carrito está vacío. Agrega productos arriba.")
-        for i, it in enumerate(carrito):
-            c1, c2, c3 = st.columns([6, 3, 1])
+            st.info("El carrito está vacío. Escanea un producto o agrégalo arriba.")
+        else:
+            st.caption("Puedes cambiar la descripción, la cantidad y el precio de cualquier línea.")
+            h1, h2, h3, h4, h5 = st.columns([5, 2, 3, 3, 1])
+            h1.caption("Producto"); h2.caption("Cant."); h3.caption("Precio (₡)"); h4.caption("Subtotal")
+        for it in list(carrito):
+            uid = it.get("uid") or _siguiente_uid()
+            it["uid"] = uid
+            maxq = 9999
+            if it.get("id_prod"):
+                fila_stock = c.execute("SELECT cantidad FROM productos WHERE id = ?", (it["id_prod"],)).fetchone()
+                maxq = max(int(fila_stock[0] or 0) if fila_stock else 0, 1)
+            c1, c2, c3, c4, c5 = st.columns([5, 2, 3, 3, 1])
             with c1:
-                st.markdown(f"**{it['desc']}**  \n{it['cant']} × ₡{it['precio']:,.0f}")
+                nueva_desc = st.text_input("Descripción", value=it["desc"], key=f"cart_desc_{uid}", label_visibility="collapsed")
             with c2:
-                st.markdown(f"**₡{it['cant'] * it['precio']:,.0f}**")
+                nueva_cant = st.number_input("Cantidad", min_value=1, max_value=maxq, value=min(int(it["cant"]), maxq), step=1,
+                                             key=f"cart_qty_{uid}", label_visibility="collapsed")
             with c3:
-                quitar = st.button("🗑️", key=f"pos_del_{i}")
+                nuevo_precio = st.number_input("Precio (₡)", min_value=0.0, value=float(it["precio"]), step=500.0,
+                                               key=f"cart_price_{uid}", label_visibility="collapsed")
+            it["desc"] = nueva_desc.strip() or it["desc"]
+            it["cant"] = int(nueva_cant)
+            it["precio"] = float(nuevo_precio)
+            with c4:
+                st.markdown(f"**₡{it['cant'] * it['precio']:,.0f}**")
+            with c5:
+                quitar = st.button("🗑️", key=f"pos_del_{uid}")
             if quitar:
-                carrito.pop(i)
+                carrito.remove(it)
                 st.rerun()
         subtotal = _total_carrito(carrito)
         if carrito:
@@ -2577,17 +2782,21 @@ def ui_pos_nueva_venta():
         else:
             pol = politica_apartado()
             prima_min = _arriba(total * pol["prima_pct"] / 100.0)
-            st.info(f"🕒 **Apartado**: los productos quedan reservados hasta completar el pago. Prima mínima: **₡{prima_min:,.0f}** ({pol['prima_pct']:g}% del total). Sin intereses.")
+            if prima_min > 0:
+                st.info(f"🕒 **Apartado**: los productos quedan reservados hasta completar el pago. Prima mínima: **₡{prima_min:,.0f}** ({pol['prima_pct']:g}% del total). Sin intereses.")
+            else:
+                st.info("🕒 **Apartado**: los productos quedan reservados hasta completar el pago. La prima es **opcional** (puedes dejarla en ₡0). Sin intereses.")
             dias_opc = sorted({15, 30, 45, 60, pol["plazo_dias"]})
             dias = st.selectbox("Plazo para completar el pago:", dias_opc, index=dias_opc.index(pol["plazo_dias"]),
                                 format_func=lambda d: f"{d} días", key=f"pos_ap_dias_{n}")
-            prima = st.number_input("Prima a pagar hoy (₡):", min_value=0.0, max_value=float(max(total, 1.0)), value=float(min(prima_min, total)), step=1000.0,
+            prima = st.number_input("Prima a pagar hoy (opcional, ₡):", min_value=0.0, max_value=float(max(total, 1.0)), value=float(min(prima_min, total)), step=1000.0,
                                     key=f"pos_ap_prima_{n}_{int(total)}")
-            opc_p = st.radio("Método de pago de la prima:", _OPC_PAGO, horizontal=True, key=f"pos_ap_metodo_{n}")
-            metodo_p = _metodo_de(opc_p)
-            ref_p = ""
-            if metodo_p != "Efectivo":
-                ref_p = st.text_input(_hint_referencia(metodo_p), key=f"pos_ap_ref_{n}_{metodo_p}")
+            metodo_p, ref_p = "Efectivo", ""
+            if prima > 0:
+                opc_p = st.radio("Método de pago de la prima:", _OPC_PAGO, horizontal=True, key=f"pos_ap_metodo_{n}")
+                metodo_p = _metodo_de(opc_p)
+                if metodo_p != "Efectivo":
+                    ref_p = st.text_input(_hint_referencia(metodo_p), key=f"pos_ap_ref_{n}_{metodo_p}")
             notas = st.text_input("Notas del apartado (opcional):", key=f"pos_ap_notas_{n}")
             if st.button("🕒 Crear apartado", key="btn_pos_apartar"):
                 if monto_desc > 0:
@@ -2611,7 +2820,7 @@ def ui_pos_apartados():
         st.caption("Estas reglas se aplican a los apartados nuevos y se imprimen en su comprobante.")
         p1, p2, p3 = st.columns(3)
         with p1:
-            n_prima = st.number_input("Prima mínima (%)", min_value=0.0, max_value=100.0, value=float(pol["prima_pct"]), step=5.0, key="pol_prima")
+            n_prima = st.number_input("Prima mínima (%): 0 = opcional", min_value=0.0, max_value=100.0, value=float(pol["prima_pct"]), step=5.0, key="pol_prima")
         with p2:
             n_plazo = st.number_input("Plazo por defecto (días)", min_value=1, max_value=365, value=int(pol["plazo_dias"]), step=5, key="pol_plazo")
         with p3:
@@ -2677,15 +2886,16 @@ def ui_pos_apartados():
     if inf["estado"] == "Activo":
         with card("sub"):
             st.markdown("**➕ Registrar abono**")
+            kab = f"{id_ap}_{len(inf['pagos'])}"  # cambia con cada pago: el formulario vuelve a su valor inicial
             a1, a2 = st.columns(2)
             with a1:
                 monto = st.number_input("Monto (₡):", min_value=0.0, max_value=float(max(inf["saldo"], 1.0)), value=float(min(inf["saldo"], 10000.0)),
-                                        step=1000.0, key=f"ap_monto_{id_ap}")
+                                        step=1000.0, key=f"ap_monto_{kab}")
             with a2:
-                metodo = _metodo_de(st.radio("Método de pago:", _OPC_PAGO, horizontal=True, key=f"ap_metodo_{id_ap}"))
+                metodo = _metodo_de(st.radio("Método de pago:", _OPC_PAGO, horizontal=True, key=f"ap_metodo_{kab}"))
             ref = ""
             if metodo != "Efectivo":
-                ref = st.text_input(_hint_referencia(metodo), key=f"ap_ref_{id_ap}_{metodo}")
+                ref = st.text_input(_hint_referencia(metodo), key=f"ap_ref_{kab}_{metodo}")
             if st.button("💾 Guardar abono", key=f"btn_ap_abono_{id_ap}"):
                 id_pago, err = registrar_pago_apartado(id_ap, monto, metodo, ref)
                 if err:
@@ -2805,7 +3015,7 @@ def ui_pos():
     doc_pos = st.session_state.get("pos_doc")
     if doc_pos:
         with card():
-            mostrar_documento(doc_pos, "pos")
+            mostrar_documento(doc_pos, "pos", expandido=True)
             if st.button("✖️ Cerrar comprobante", key="pos_doc_cerrar"):
                 st.session_state.pop("pos_doc", None)
                 st.rerun()

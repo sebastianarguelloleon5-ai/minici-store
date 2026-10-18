@@ -686,11 +686,36 @@ def restaurar_respaldo(datos):
 # -------------------------------------------------------------
 import functools
 
+# ==========================================
+# PALETA ÚNICA DE LA MARCA (app, comprobantes, ticket y escáner usan estos mismos tonos)
+# Todos los textos cumplen contraste WCAG AA (4,5:1) y los bordes de campos 3:1.
+# ==========================================
+PALETA = {
+    "raspberry": "#BE185D", "raspberry_dark": "#9D174D", "plum": "#831843",
+    "brand": "#F3B2C9", "brand_soft": "#FDE8F0",
+    "paper": "#FFF6FA", "surface": "#FFFFFF", "surface_soft": "#FFF9FC",
+    "line": "#F3D2E0", "line_strong": "#C07796",
+    "ink": "#2B1B24", "muted": "#705A66",
+    "green": "#047857", "green_soft": "#E8F6EF", "green_text": "#065F46", "green_flash": "#BFE8D5",
+    "amber": "#B45309", "amber_soft": "#FFF4E0", "amber_text": "#7A3E06",
+    "red": "#B91C1C", "red_soft": "#FDECEC", "red_text": "#7F1D1D",
+    "whatsapp": "#0F8741", "whatsapp_dark": "#0D7237",
+    "accent": "#F5A623",  # solo decorativo (franja del encabezado): nunca para texto
+}
+
+
+def _pintar(texto):
+    """Reemplaza @@nombre@@ por el tono de la paleta."""
+    for k, v in PALETA.items():
+        texto = texto.replace(f"@@{k}@@", v)
+    return texto
+
+
 FACT_COLORS = {
-    "raspberry": "#BE185D", "plum": "#831843", "brand": "#F3B2C9",
-    "soft": "#FDF2F8", "zebra": "#FFF7FB", "line": "#F6D5E4",
-    "text": "#1F2937", "muted": "#6B7280", "green": "#059669",
-    "orange": "#F5A623", "white": "#FFFFFF",
+    "raspberry": PALETA["raspberry"], "plum": PALETA["plum"], "brand": PALETA["brand"],
+    "soft": PALETA["paper"], "zebra": PALETA["surface_soft"], "line": PALETA["line"],
+    "text": PALETA["ink"], "muted": PALETA["muted"], "green": PALETA["green"],
+    "orange": PALETA["amber"], "accent": PALETA["accent"], "white": PALETA["surface"],
 }
 
 _FUENTES_REG = [
@@ -840,7 +865,7 @@ def render_factura_imagen(doc):
     K = FACT_COLORS
     S, W = 2, 1000
     logo, bg_logo = _logo_factura()
-    header_bg = bg_logo if bg_logo else "#FEEFF6"
+    header_bg = bg_logo if bg_logo else PALETA["brand_soft"]
     meas = ImageDraw.Draw(Image.new("RGB", (4, 4)))
 
     def F(bold, size):
@@ -930,7 +955,7 @@ def render_factura_imagen(doc):
     T(W - 44, 122, datetime.now().strftime("%d/%m/%Y  ·  %H:%M"), F(False, 20), K["muted"], "r")
     T(W - 44, 152, f"Ref. {doc.get('ref', '')}", F(True, 20), K["raspberry"], "r")
     R((0, header_h, W, header_h + 6), fill=K["raspberry"])
-    R((0, header_h, 150, header_h + 6), fill=K["orange"])
+    R((0, header_h, 150, header_h + 6), fill=K["accent"])
 
     # ---------- Tarjeta de cliente ----------
     R((40, client_top, W - 40, client_top + client_h), fill=K["soft"], outline=K["line"], width=2, r=20)
@@ -1005,7 +1030,7 @@ def render_factura_imagen(doc):
             wm = logo.resize((wm_w, wm_h), Image.LANCZOS)
             diff = ImageChops.difference(wm, Image.new("RGB", wm.size, bg_logo)).convert("L")
             mask = diff.point(lambda v: int(min(255, v * 4) * 0.10))
-            capa = Image.new("RGB", img.size, "#FFFFFF")
+            capa = Image.new("RGB", img.size, PALETA["surface"])
             capa.paste(wm, ((img.width - wm_w) // 2, body_top + ((body_bot - body_top) - wm_h) // 2), mask)
             img = ImageChops.multiply(img, capa)
         except Exception:
@@ -1106,7 +1131,7 @@ def _logo_ticket_b64():
         im = logo.resize((w, max(1, int(logo.height * w / logo.width))), Image.LANCZOS)
         diff = ImageChops.difference(im, Image.new("RGB", im.size, bg)).convert("L")
         mask = diff.point(lambda v: min(255, v * 6))
-        base = Image.new("RGB", im.size, "#FFFFFF")
+        base = Image.new("RGB", im.size, PALETA["surface"])
         base.paste(im, (0, 0), mask)
         gris = ImageOps.autocontrast(base.convert("L"), cutoff=1)
         buf = io.BytesIO()
@@ -1116,18 +1141,18 @@ def _logo_ticket_b64():
         return None
 
 
-_TICKET_PLANTILLA = """<!DOCTYPE html>
+_TICKET_PLANTILLA = _pintar("""<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>%%TITULO%%</title>
 <style id="pg">@page { size: 80mm 200mm; margin: 0; }</style>
 <style>
-  html, body { margin: 0; padding: 0; background: #f3f4f6; }
-  .bar { text-align: center; padding: 10px 8px 4px; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 14px; color: #4a2c3b; }
-  .bar select { font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid #F3B2C9; margin-right: 8px; }
-  .bar button { background: #BE185D; color: #fff; border: 0; border-radius: 999px; padding: 11px 22px; font-size: 15px; font-weight: 700; cursor: pointer; }
-  .tip { text-align: center; font: 12px system-ui, sans-serif; color: #7C6572; padding: 2px 10px 0; }
-  #t { width: 72mm; margin: 10px auto 22px; padding: 4mm 3mm 8mm; background: #fff; color: #000;
+  html, body { margin: 0; padding: 0; background: @@paper@@; }
+  .bar { text-align: center; padding: 10px 8px 4px; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 14px; color: @@ink@@; }
+  .bar select { font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid @@line_strong@@; margin-right: 8px; }
+  .bar button { background: @@raspberry@@; color: @@surface@@; border: 0; border-radius: 999px; padding: 11px 22px; font-size: 15px; font-weight: 700; cursor: pointer; }
+  .tip { text-align: center; font: 12px system-ui, sans-serif; color: @@muted@@; padding: 2px 10px 0; }
+  #t { width: 72mm; margin: 10px auto 22px; padding: 4mm 3mm 8mm; background: @@surface@@; color: #000;
        font-family: 'Courier New', Courier, 'Liberation Mono', monospace; font-size: 12.5px; line-height: 1.38;
        box-shadow: 0 1px 8px rgba(0,0,0,.25); box-sizing: border-box; }
   #t.p58 { font-size: 11px; }
@@ -1143,11 +1168,11 @@ _TICKET_PLANTILLA = """<!DOCTYPE html>
   .big { font-size: 1.3em; font-weight: 700; }
   .dim { opacity: .85; }
   /* Diseño de impresión: el ticket ocupa exactamente el ancho del rollo (la clase se usa también para medir su alto) */
-  body.imprimiendo { background: #fff; }
+  body.imprimiendo { background: @@surface@@; }
   body.imprimiendo .bar, body.imprimiendo .tip { display: none !important; }
   body.imprimiendo #t { width: var(--pw, 80mm) !important; margin: 0 !important; padding: 3mm var(--pad, 4mm) 6mm !important; box-shadow: none !important; }
   @media print {
-    html, body { background: #fff; }
+    html, body { background: @@surface@@; }
     .bar, .tip { display: none !important; }
     #t { width: var(--pw, 80mm) !important; margin: 0 !important; padding: 3mm var(--pad, 4mm) 6mm !important; box-shadow: none !important; }
   }
@@ -1188,7 +1213,7 @@ _TICKET_PLANTILLA = """<!DOCTYPE html>
   calcularPagina();
   window.addEventListener('load', calcularPagina);
 </script>
-</body></html>"""
+</body></html>""")
 
 
 def render_ticket_html(doc):
@@ -1714,28 +1739,36 @@ def construir_doc_apartado(id_apartado, modo="estado", id_pago=None):
 
 
 
-_HTML_ESCANER = r'''<!DOCTYPE html>
+_HTML_ESCANER = _pintar(r'''<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-  body { margin: 0; padding: 2px; font-family: 'DM Sans', system-ui, -apple-system, sans-serif; color: #4a2c3b; }
+  body { margin: 0; padding: 2px; font-family: 'DM Sans', system-ui, -apple-system, sans-serif; color: @@ink@@; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
   button, label.btn {
-    background: #BE185D; color: #fff; border: 1.5px solid #BE185D; border-radius: 999px;
+    background: @@raspberry@@; color: @@surface@@; border: 1.5px solid @@raspberry@@; border-radius: 999px;
     padding: 10px 16px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit;
   }
-  button.sec, label.btn.sec { background: #fff; color: #BE185D; border-color: #F3B2C9; }
+  button.sec, label.btn.sec { background: @@surface@@; color: @@raspberry@@; border-color: @@line_strong@@; }
   #wrap { display: none; margin-top: 10px; }
   #vbox { position: relative; max-width: 460px; overflow: hidden; border-radius: 14px; background: #000; }
   video { width: 100%; display: block; }
   .guide { position: absolute; left: 10%; top: 28%; width: 80%; height: 44%;
-           border: 2px solid #F3B2C9; border-radius: 10px; box-shadow: 0 0 0 999px rgba(0,0,0,.30);
+           border: 2px solid @@brand@@; border-radius: 10px; box-shadow: 0 0 0 999px rgba(0,0,0,.30);
            pointer-events: none; }
-  #msg { font-size: 13px; margin-top: 8px; color: #7C6572; min-height: 18px; }
-  #msg.ok { color: #059669; font-weight: 600; }
-  #msg.err { color: #B91C1C; }
+  #msg { font-size: 13px; margin-top: 8px; color: @@muted@@; min-height: 18px; }
+  #msg.ok { color: @@green@@; font-weight: 600; }
+  #msg.err { color: @@red@@; }
+  .chip { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; padding: 6px 16px; border-radius: 999px;
+          background: @@green@@; color: @@surface@@; font-weight: 700; font-size: 22px; line-height: 1; }
+  #okflash { position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+             background: rgba(4, 120, 87, .62); color: @@surface@@; font-size: 110px; font-weight: 700; pointer-events: none; }
+  #okflash.show { display: flex; animation: pop .9s ease-out forwards; }
+  @keyframes pop { 0% { opacity: 0; transform: scale(.6); } 20% { opacity: 1; transform: scale(1.06); } 60% { opacity: 1; } 100% { opacity: 0; transform: scale(1); } }
+  #cnt { position: absolute; top: 8px; right: 8px; min-width: 26px; padding: 3px 9px; border-radius: 999px; text-align: center;
+         background: @@green@@; color: @@surface@@; font-weight: 700; font-size: 15px; display: none; }
 </style>
 </head>
 <body>
@@ -1746,7 +1779,7 @@ _HTML_ESCANER = r'''<!DOCTYPE html>
   </label>
 </div>
 <div id="wrap">
-  <div id="vbox"><video id="v" playsinline muted autoplay></video><div class="guide"></div></div>
+  <div id="vbox"><video id="v" playsinline muted autoplay></video><div class="guide"></div><div id="okflash">✓</div><div id="cnt"></div></div>
   <div class="row" style="margin-top:8px"><button class="sec" id="btnStop">Cerrar cámara</button></div>
 </div>
 <div id="msg"></div>
@@ -1825,6 +1858,31 @@ function stopCam() {
   fit();
 }
 
+let actx = null;
+function getCtx() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!actx && AC) actx = new AC();
+    if (actx && actx.state === "suspended") actx.resume();
+  } catch (e) {}
+  return actx;
+}
+function tono(f, ini, dur) {
+  const c = getCtx(); if (!c) return;
+  const o = c.createOscillator(), g = c.createGain(), t0 = c.currentTime + ini;
+  o.type = "sine"; o.frequency.value = f;
+  g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.35, t0 + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g); g.connect(c.destination); o.start(t0); o.stop(t0 + dur + 0.02);
+}
+function beep() { tono(1175, 0, 0.09); tono(1568, 0.1, 0.12); }
+// Confirmación de lectura: pitido + vibración + destello verde con ✓ (y el número de lecturas en modo continuo)
+function confirmar(n) {
+  beep();
+  try { if (navigator.vibrate) navigator.vibrate(120); } catch (e) {}
+  const f = $("okflash"); f.classList.remove("show"); void f.offsetWidth; f.classList.add("show");
+  if (n) { const cn = $("cnt"); cn.style.display = "block"; cn.textContent = String(n); }
+}
+
 function emitLectura(code) {
   seq += 1;
   lecturas.push({ seq: seq, code: String(code), ts: Date.now() });
@@ -1838,10 +1896,9 @@ function onCode(code) {
     const repetido = (code === lastCode && now - lastT < 2500);   // mismo código seguido = misma lectura
     lastCode = code; lastT = now;
     if (!repetido) {
-      try { if (navigator.vibrate) navigator.vibrate(120); } catch (e) {}
       contador += 1;
       emitLectura(code);
-      say("✅ " + code + "  ·  escaneados: " + contador, "ok");
+      confirmar(contador);
     }
     return true;
   }
@@ -1851,8 +1908,9 @@ function onCode(code) {
 
 function found(code) {
   stopCam();
+  beep();
   try { if (navigator.vibrate) navigator.vibrate(150); } catch (e) {}
-  say("✅ Código detectado: " + code, "ok");
+  msg.className = ""; msg.innerHTML = '<span class="chip">✓</span>'; fit();
   emit(code);
 }
 
@@ -1891,6 +1949,7 @@ function loopZXing() {
 }
 
 async function startCam() {
+  getCtx();
   if (running) return;
   say("Abriendo cámara…");
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -1959,6 +2018,7 @@ async function decodeFile(file) {
 $("btnCam").addEventListener("click", startCam);
 $("btnStop").addEventListener("click", () => { stopCam(); say(""); });
 $("foto").addEventListener("change", async (ev) => {
+  getCtx();
   const f = ev.target.files && ev.target.files[0];
   if (!f) return;
   say("Leyendo la foto…");
@@ -1975,7 +2035,7 @@ window.addEventListener("pagehide", stopCam);
 </script>
 </body>
 </html>
-'''
+''')
 
 
 def _declarar_componente_escaner():
@@ -2094,8 +2154,17 @@ def talla_desde_nombre(nombre_caja):
     return None
 
 
-def selector_talla_caja(key_prefix, nombre_actual=None):
-    """Muestra selector de talla + tipo de cambio y devuelve (nombre_caja, precio_crc)."""
+def tipo_cambio_actual():
+    """Último tipo de cambio usado por la administradora (₡ por US$1)."""
+    try:
+        return float(cfg_get("tipo_cambio_crc", TIPO_CAMBIO_DEFAULT))
+    except Exception:
+        return float(TIPO_CAMBIO_DEFAULT)
+
+
+def selector_talla_caja(key_prefix, nombre_actual=None, editar_tc=True):
+    """Selector de talla de caja. Devuelve (nombre_caja, precio_crc).
+    Con editar_tc=False (registro público) usa el tipo de cambio guardado y no lo muestra para editar."""
     tallas = list(TALLAS_CAJA_USD.keys())
     actual = talla_desde_nombre(nombre_actual)
     c1, c2 = st.columns(2)
@@ -2106,10 +2175,14 @@ def selector_talla_caja(key_prefix, nombre_actual=None):
             format_func=lambda t: f"{t} — US${TALLAS_CAJA_USD[t]:,.0f}",
             key=f"{key_prefix}_talla",
         )
-    with c2:
-        tc = st.number_input("Tipo de cambio (₡ por US$1)", min_value=1.0,
-                             value=float(TIPO_CAMBIO_DEFAULT), step=1.0,
-                             key=f"{key_prefix}_tc")
+    tc = tipo_cambio_actual()
+    if editar_tc:
+        with c2:
+            tc = st.number_input("Tipo de cambio (₡ por US$1)", min_value=1.0,
+                                 value=float(tc), step=1.0,
+                                 key=f"{key_prefix}_tc")
+        if abs(tc - tipo_cambio_actual()) > 0.001:
+            cfg_set("tipo_cambio_crc", tc)  # queda como el valor por defecto de los próximos registros
     usd = TALLAS_CAJA_USD[talla]
     crc = round(usd * tc)
     st.caption(f"💵 Talla {talla}: US${usd:,.0f} × ₡{tc:,.0f} = **₡{crc:,.0f}**")
@@ -2133,22 +2206,17 @@ def card(kind="card"):
         return st.container(border=True)
 
 
-st.markdown(
-    """
+_CSS_VARS = "\n       ".join(f"--{k.replace('_', '-')}: {v};" for k, v in PALETA.items())
+_CSS_GLOBAL = """
 <style>
    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap');
 
    :root {
-       --brand: #F3B2C9;
-       --brand-soft: #FDE8F0;
-       --raspberry: #BE185D;
-       --raspberry-dark: #9D174D;
-       --plum: #831843;
-       --ink: #2B1B24;
-       --muted: #7C6572;
-       --line: #F3D2E0;
-       --paper: #FFF6FA;
+       %%VARS%%
+       color-scheme: light;
    }
+   html { color-scheme: light; }
+   ::selection { background: var(--brand); color: var(--plum); }
 
    /* ---------- Base ---------- */
    .stApp {
@@ -2180,6 +2248,9 @@ st.markdown(
    hr {
        border-color: var(--line) !important;
    }
+   a, a:visited { color: var(--raspberry); }
+   a:hover { color: var(--raspberry-dark); }
+   .titulo-marca { color: var(--raspberry) !important; }
 
    /* ---------- Encabezado de la app ---------- */
    .app-header {
@@ -2218,7 +2289,7 @@ st.markdown(
 
    /* ---------- Banner de sección ---------- */
    .top-banner {
-       background: #ffffff;
+       background: var(--surface);
        border: 1px solid var(--line);
        border-left: 6px solid var(--brand);
        padding: 16px 20px;
@@ -2241,14 +2312,14 @@ st.markdown(
    /* ---------- Tarjetas (st.container con borde) ---------- */
    div[class*="st-key-card_"],
    div[data-testid="stVerticalBlockBorderWrapper"]:has(> div[class*="st-key-card_"]) {
-       background: #ffffff !important;
+       background: var(--surface) !important;
        border: 1px solid var(--line) !important;
        border-radius: 18px !important;
        box-shadow: 0 4px 18px rgba(190, 24, 93, 0.06) !important;
    }
    div[class*="st-key-sub_"],
    div[data-testid="stVerticalBlockBorderWrapper"]:has(> div[class*="st-key-sub_"]) {
-       background: #FFF9FC !important;
+       background: var(--surface-soft) !important;
        border: 1px solid var(--line) !important;
        border-radius: 14px !important;
        box-shadow: none !important;
@@ -2264,7 +2335,7 @@ st.markdown(
 
    /* ---------- Métricas ---------- */
    div[data-testid="stMetric"] {
-       background-color: #ffffff !important;
+       background-color: var(--surface) !important;
        padding: 14px 16px !important;
        border-radius: 16px !important;
        border: 1px solid var(--line) !important;
@@ -2293,7 +2364,7 @@ st.markdown(
    .stSelectbox > div > div,
    .stTextInput > div > div,
    .stNumberInput > div > div {
-       background-color: #ffffff !important;
+       background-color: var(--surface) !important;
        color: var(--ink) !important;
        fill: var(--ink) !important;
    }
@@ -2301,25 +2372,48 @@ st.markdown(
    div[data-baseweb="select"] > div,
    div[data-baseweb="textarea"] {
        border-radius: 10px !important;
-       border: 1px solid #EDC3D5 !important;
+       border: 1px solid var(--line-strong) !important;
    }
    div[data-baseweb="input"]:focus-within,
    div[data-baseweb="select"] > div:focus-within,
    div[data-baseweb="textarea"]:focus-within {
        border-color: var(--raspberry) !important;
-       box-shadow: 0 0 0 3px rgba(190, 24, 93, 0.15) !important;
+       box-shadow: 0 0 0 3px rgba(190, 24, 93, 0.18) !important;
    }
 
    input, textarea, [role="option"], [role="combobox"] {
        color: var(--ink) !important;
        -webkit-text-fill-color: var(--ink) !important;
-       background-color: #ffffff !important;
+       background-color: var(--surface) !important;
+   }
+   input::placeholder, textarea::placeholder {
+       color: var(--muted) !important;
+       -webkit-text-fill-color: var(--muted) !important;
+       opacity: 1 !important;
+   }
+   input:disabled, textarea:disabled {
+       color: var(--muted) !important;
+       -webkit-text-fill-color: var(--muted) !important;
+       background-color: var(--brand-soft) !important;
    }
 
+   /* Listas desplegables: opción resaltada y opción elegida bien visibles */
    div[data-baseweb="popover"],
    div[data-baseweb="popover"] * {
-       background-color: #ffffff !important;
+       background-color: var(--surface) !important;
        color: var(--ink) !important;
+   }
+   div[data-baseweb="popover"] {
+       border: 1px solid var(--line-strong) !important;
+       border-radius: 12px !important;
+       box-shadow: 0 8px 24px rgba(131, 24, 67, 0.15) !important;
+   }
+   div[data-baseweb="popover"] li[role="option"]:hover,
+   div[data-baseweb="popover"] li[role="option"]:hover *,
+   div[data-baseweb="popover"] li[role="option"][aria-selected="true"],
+   div[data-baseweb="popover"] li[role="option"][aria-selected="true"] * {
+       background-color: var(--brand-soft) !important;
+       color: var(--plum) !important;
    }
 
    .stNumberInput button {
@@ -2328,10 +2422,22 @@ st.markdown(
        border: none !important;
    }
 
+   /* Casillas de verificación */
+   label[data-baseweb="checkbox"] > span:first-child {
+       background-color: var(--surface) !important;
+       border: 2px solid var(--line-strong) !important;
+       border-radius: 6px !important;
+   }
+   label[data-baseweb="checkbox"]:has(input:checked) > span:first-child {
+       background-color: var(--raspberry) !important;
+       border-color: var(--raspberry) !important;
+   }
+   label[data-baseweb="checkbox"] > span:first-child svg { color: var(--surface) !important; fill: var(--surface) !important; }
+
    /* ---------- Botones ---------- */
    div.stButton > button:first-child {
        background-color: var(--raspberry) !important;
-       color: #ffffff !important;
+       color: var(--surface) !important;
        border-radius: 12px;
        font-weight: 600;
        border: none;
@@ -2342,13 +2448,30 @@ st.markdown(
        transition: background-color 0.15s ease, transform 0.05s ease;
    }
    div.stButton > button:first-child * {
-       color: #ffffff !important;
+       color: var(--surface) !important;
    }
    div.stButton > button:first-child:hover {
        background-color: var(--raspberry-dark) !important;
    }
    div.stButton > button:first-child:active {
        transform: translateY(1px);
+   }
+   /* Botón desactivado: se nota que no se puede usar */
+   div.stButton > button:first-child:disabled,
+   div.stDownloadButton > button:first-child:disabled {
+       background-color: var(--brand-soft) !important;
+       color: var(--muted) !important;
+       border: 1px solid var(--line) !important;
+       box-shadow: none !important;
+       cursor: not-allowed !important;
+   }
+   div.stButton > button:first-child:disabled *,
+   div.stDownloadButton > button:first-child:disabled * {
+       color: var(--muted) !important;
+   }
+   div.stButton > button:focus-visible, div.stDownloadButton > button:focus-visible {
+       outline: 3px solid var(--brand) !important;
+       outline-offset: 2px !important;
    }
 
    div.stDownloadButton > button:first-child {
@@ -2364,7 +2487,7 @@ st.markdown(
    div.stDownloadButton > button:first-child * {
        color: var(--plum) !important;
    }
-   div.stDownloadButton > button:first-child:hover {
+   div.stDownloadButton > button:first-child:hover:not(:disabled) {
        background-color: var(--brand) !important;
    }
 
@@ -2373,8 +2496,9 @@ st.markdown(
    .st-key-btn_salir_client div.stButton > button:first-child,
    .st-key-btn_eliminar_pedido div.stButton > button:first-child,
    .st-key-btn_inv_del div.stButton > button:first-child {
-       background-color: #ffffff !important;
-       border: 1.5px solid var(--brand) !important;
+       background-color: var(--surface) !important;
+       color: var(--raspberry) !important;
+       border: 1.5px solid var(--line-strong) !important;
        box-shadow: none !important;
    }
    .st-key-btn_salir_admin div.stButton > button:first-child *,
@@ -2393,8 +2517,8 @@ st.markdown(
    .btn-whatsapp {
        display: inline-block;
        width: 100%;
-       background-color: #25D366 !important;
-       color: #ffffff !important;
+       background-color: var(--whatsapp) !important;
+       color: var(--surface) !important;
        text-align: center;
        font-weight: 600;
        padding: 10px 15px;
@@ -2402,11 +2526,11 @@ st.markdown(
        text-decoration: none;
        font-size: 15px;
        margin-top: 10px;
-       box-shadow: 0 3px 8px rgba(37, 211, 102, 0.3);
+       box-shadow: 0 3px 8px rgba(15, 135, 65, 0.3);
    }
    .btn-whatsapp:hover {
-       background-color: #1da851 !important;
-       color: #ffffff !important;
+       background-color: var(--whatsapp-dark) !important;
+       color: var(--surface) !important;
    }
 
    /* ---------- Menús tipo pastilla ---------- */
@@ -2416,8 +2540,8 @@ st.markdown(
        flex-wrap: wrap !important;
    }
    div[data-testid="stRadio"] label:not([data-testid="stWidgetLabel"]) {
-       background-color: #ffffff !important;
-       border: 1.5px solid var(--line) !important;
+       background-color: var(--surface) !important;
+       border: 1.5px solid var(--line-strong) !important;
        padding: 6px 14px !important;
        border-radius: 999px !important;
        font-weight: 600 !important;
@@ -2425,7 +2549,8 @@ st.markdown(
        transition: border-color 0.15s ease, background-color 0.15s ease;
    }
    div[data-testid="stRadio"] label:not([data-testid="stWidgetLabel"]):hover {
-       border-color: var(--brand) !important;
+       border-color: var(--raspberry) !important;
+       background-color: var(--brand-soft) !important;
    }
    div[data-testid="stRadio"] label:not([data-testid="stWidgetLabel"]) p,
    div[data-testid="stRadio"] label:not([data-testid="stWidgetLabel"]) span,
@@ -2441,39 +2566,129 @@ st.markdown(
    div[data-testid="stRadio"] label:has(input:checked) p,
    div[data-testid="stRadio"] label:has(input:checked) span,
    div[data-testid="stRadio"] label:has(input:checked) div {
-       color: #ffffff !important;
-       -webkit-text-fill-color: #ffffff !important;
+       color: var(--surface) !important;
+       -webkit-text-fill-color: var(--surface) !important;
    }
    div[data-testid="stRadio"] input[type="radio"] {
        display: none !important;
    }
 
-   /* ---------- Tablas, alertas, expanders, imágenes ---------- */
+   /* ---------- Alertas (éxito, aviso, error, información) con los tonos de la marca ---------- */
+   div[data-testid="stAlert"] {
+       border-radius: 12px !important;
+       border: 1px solid var(--line) !important;
+   }
+   div[data-testid="stAlert"]:has([data-testid="stAlertContentInfo"]),
+   div[data-testid="stAlert"]:has([data-testid="stAlertContentInfo"]) > div {
+       background-color: var(--brand-soft) !important;
+       border-left: 5px solid var(--raspberry) !important;
+   }
+   div[data-testid="stAlert"]:has([data-testid="stAlertContentInfo"]) * { color: var(--plum) !important; }
+   div[data-testid="stAlert"]:has([data-testid="stAlertContentSuccess"]),
+   div[data-testid="stAlert"]:has([data-testid="stAlertContentSuccess"]) > div {
+       background-color: var(--green-soft) !important;
+       border-left: 5px solid var(--green) !important;
+   }
+   div[data-testid="stAlert"]:has([data-testid="stAlertContentSuccess"]) * { color: var(--green-text) !important; }
+   div[data-testid="stAlert"]:has([data-testid="stAlertContentWarning"]),
+   div[data-testid="stAlert"]:has([data-testid="stAlertContentWarning"]) > div {
+       background-color: var(--amber-soft) !important;
+       border-left: 5px solid var(--amber) !important;
+   }
+   div[data-testid="stAlert"]:has([data-testid="stAlertContentWarning"]) * { color: var(--amber-text) !important; }
+   div[data-testid="stAlert"]:has([data-testid="stAlertContentError"]),
+   div[data-testid="stAlert"]:has([data-testid="stAlertContentError"]) > div {
+       background-color: var(--red-soft) !important;
+       border-left: 5px solid var(--red) !important;
+   }
+   div[data-testid="stAlert"]:has([data-testid="stAlertContentError"]) * { color: var(--red-text) !important; }
+
+   /* ---------- Tablas, expanders, imágenes, formularios ---------- */
    div[data-testid="stDataFrame"] {
        border: 1px solid var(--line);
        border-radius: 12px;
        overflow: hidden;
    }
-   div[data-testid="stAlert"] {
-       border-radius: 12px !important;
-   }
    div[data-testid="stExpander"] {
-       background: #ffffff !important;
+       background: var(--surface) !important;
        border: 1px solid var(--line) !important;
        border-radius: 14px !important;
    }
+   div[data-testid="stExpander"] summary:hover { background-color: var(--brand-soft) !important; }
    div[data-testid="stImage"] img {
        border-radius: 12px;
    }
    div[data-testid="stForm"] {
        border: 1px solid var(--line) !important;
        border-radius: 14px !important;
-       background: #FFFBFD !important;
+       background: var(--surface-soft) !important;
    }
+
+   /* ---------- Barra de progreso, indicador de carga, subir archivos, avisos flotantes ---------- */
+   div[data-testid="stProgress"] [role="progressbar"] { background-color: var(--brand-soft) !important; }
+   div[data-testid="stProgress"] [role="progressbar"] > div { background-color: var(--raspberry) !important; }
+   div[data-testid="stSpinner"] i {
+       border-color: var(--brand) var(--brand) var(--brand) var(--raspberry) !important;
+   }
+   section[data-testid="stFileUploaderDropzone"] {
+       background-color: var(--surface-soft) !important;
+       border: 1.5px dashed var(--line-strong) !important;
+       border-radius: 12px !important;
+   }
+   section[data-testid="stFileUploaderDropzone"] button {
+       background-color: var(--brand-soft) !important;
+       color: var(--plum) !important;
+       border: 1px solid var(--brand) !important;
+       border-radius: 10px !important;
+   }
+   div[data-testid="stToast"] {
+       background-color: var(--surface) !important;
+       border: 1px solid var(--line-strong) !important;
+       border-radius: 12px !important;
+   }
+   div[data-testid="stTooltipContent"], div[data-testid="stTooltipContent"] * {
+       background-color: var(--plum) !important;
+       color: var(--surface) !important;
+   }
+   div[data-testid="stCode"], div[data-testid="stCode"] pre, div[data-testid="stCode"] code {
+       background-color: var(--surface-soft) !important;
+       color: var(--ink) !important;
+       border-radius: 10px;
+   }
+
+   /* ---------- Escaneo en el POS: confirmación visible ---------- */
+   @keyframes escaneo-fila {
+       0%   { background-color: var(--green-flash); }
+       100% { background-color: var(--green-soft); }
+   }
+   div[class*="st-key-cartrow_hl_"] {
+       background-color: var(--green-soft) !important;
+       border-left: 6px solid var(--green) !important;
+       border-radius: 12px !important;
+       padding: 6px 10px !important;
+       animation: escaneo-fila 1.4s ease-out;
+   }
+   @keyframes escaneo-pop {
+       0%   { transform: scale(.5); opacity: 0; max-height: 0; }
+       15%  { transform: scale(1.08); opacity: 1; max-height: 120px; }
+       30%  { transform: scale(1); opacity: 1; }
+       80%  { opacity: 1; max-height: 120px; }
+       100% { opacity: 0; max-height: 0; padding-top: 0; padding-bottom: 0; margin: 0; }
+   }
+   .scan-flash {
+       display: flex; align-items: center; justify-content: center; gap: 10px;
+       margin: 8px 0; padding: 12px 18px; border-radius: 14px; overflow: hidden;
+       font-size: 34px; font-weight: 700; line-height: 1.1;
+       animation: escaneo-pop 1.8s ease-out forwards;
+   }
+   .scan-flash, .scan-flash * { color: var(--surface) !important; }
+   .scan-flash.ok  { background-color: var(--green); }
+   .scan-flash.err { background-color: var(--red); }
+   .scan-flash small { font-size: 16px; font-weight: 600; }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+
+""".replace("%%VARS%%", _CSS_VARS)
+st.markdown(_CSS_GLOBAL, unsafe_allow_html=True)
 
 # -------------------------------------------------------------
 # PANTALLAS DEL POS: VENTA, APARTADOS E HISTORIAL
@@ -2541,18 +2756,27 @@ def _productos_por_codigo(codigo):
     return [f for f in filas if _normalizar_codigo(f[4]) == buscado]
 
 
-def _registrar_scan(estado, mensaje):
-    log = st.session_state.setdefault("pos_scan_log", [])
-    log.append((estado, mensaje))
-    del log[:-8]
+def _registrar_feedback(estado, uid=None, origen="pistola", motivo=""):
+    """Anota el resultado del último escaneo; la pantalla lo muestra con un destello, un pitido y la línea resaltada."""
+    previo = st.session_state.get("pos_fb") or {"n": 0}
+    st.session_state["pos_fb"] = {"n": previo["n"] + 1, "estado": estado, "uid": uid, "origen": origen, "motivo": motivo}
 
 
-def pos_agregar_por_codigo(codigo, directo=True):
+def _contenedor(key):
+    try:
+        return st.container(key=key)
+    except TypeError:  # versiones antiguas de Streamlit sin parámetro key
+        return st.container()
+
+
+def pos_agregar_por_codigo(codigo, directo=True, origen="pistola"):
     """Procesa un código de barras leído en el POS. Devuelve (estado, mensaje).
-    estado: 'ok' (añadido), 'seleccionado' (listo para revisar), 'sin_stock' o 'no_existe'."""
+    estado: 'ok' (añadido), 'seleccionado' (listo para revisar), 'sin_stock' o 'no_existe'.
+    La pantalla NO muestra el mensaje: confirma con destello, pitido y la línea resaltada."""
     carrito = st.session_state.setdefault("pos_cart", [])
     candidatos = _productos_por_codigo(codigo)
     if not candidatos:
+        _registrar_feedback("no_existe", None, origen, "No existe")
         return "no_existe", f"El código {codigo} no está en el inventario. Agrégalo como producto express o regístralo en Inventario."
     en_carrito = {}
     for it in carrito:
@@ -2560,20 +2784,24 @@ def pos_agregar_por_codigo(codigo, directo=True):
             en_carrito[it["id_prod"]] = en_carrito.get(it["id_prod"], 0) + it["cant"]
     elegido = next((f for f in candidatos if int(f[3] or 0) - en_carrito.get(f[0], 0) > 0), None)
     if elegido is None:
+        _registrar_feedback("sin_stock", None, origen, "Sin stock")
         return "sin_stock", f"«{candidatos[0][1]}» no tiene existencias disponibles."
     id_prod, desc, precio = elegido[0], elegido[1], float(elegido[2] or 0.0)
     if not directo:
         st.session_state["pos_sel_producto"] = id_prod
+        _registrar_feedback("seleccionado", None, origen)
         return "seleccionado", f"«{desc}» (₡{precio:,.0f}) quedó seleccionado abajo para que lo revises y lo agregues."
     existente = next((i for i in carrito if i.get("id_prod") == id_prod), None)
     if existente:
         existente["cant"] += 1
         if existente.get("uid"):
             st.session_state[f"cart_qty_{existente['uid']}"] = existente["cant"]
-        cant = existente["cant"]
+        cant, uid = existente["cant"], existente.get("uid")
     else:
-        carrito.append(_nueva_linea(id_prod, desc, 1, precio, "Del Stock General"))
-        cant = 1
+        linea = _nueva_linea(id_prod, desc, 1, precio, "Del Stock General")
+        carrito.append(linea)
+        cant, uid = 1, linea["uid"]
+    _registrar_feedback("ok", uid, origen)
     return "ok", f"{desc} añadido (×{cant} en el carrito)."
 
 
@@ -2583,8 +2811,7 @@ def _pos_cb_scan():
     st.session_state["pos_scan_in"] = ""
     if not codigo:
         return
-    estado, msg = pos_agregar_por_codigo(codigo, st.session_state.get("pos_scan_directo", True))
-    _registrar_scan(estado, msg)
+    pos_agregar_por_codigo(codigo, st.session_state.get("pos_scan_directo", True), "pistola")
 
 
 def _pos_procesar_camara(res):
@@ -2596,8 +2823,7 @@ def _pos_procesar_camara(res):
     ult_seq = ultimo[1] if ultimo and ultimo[0] == sid else 0
     nuevas = sorted([x for x in lecturas if x.get("seq", 0) > ult_seq], key=lambda x: x["seq"])
     for x in nuevas:
-        estado, msg = pos_agregar_por_codigo(str(x.get("code", "")), st.session_state.get("pos_scan_directo", True))
-        _registrar_scan(estado, msg)
+        pos_agregar_por_codigo(str(x.get("code", "")), st.session_state.get("pos_scan_directo", True), "camara")
     if nuevas:
         st.session_state["pos_cam_ultimo"] = (sid, nuevas[-1]["seq"])
 
@@ -2614,7 +2840,43 @@ def _enfocar_campo_scan():
     </script>""", height=0)
 
 
-_ICONO_SCAN = {"ok": "✅", "seleccionado": "📝", "sin_stock": "⛔", "no_existe": "❓"}
+_PLANTILLA_PITIDO = """<script>/* %%N%% */
+(function () { try {
+  var W = window.parent || window, AC = W.AudioContext || W.webkitAudioContext || window.AudioContext || window.webkitAudioContext;
+  var ctx = W.__minici_ctx || (W.__minici_ctx = new AC());
+  if (ctx.state === 'suspended') ctx.resume();
+  function tono(f, ini, dur) {
+    var o = ctx.createOscillator(), g = ctx.createGain(), t0 = ctx.currentTime + ini;
+    o.type = 'sine'; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.35, t0 + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(ctx.destination); o.start(t0); o.stop(t0 + dur + 0.02);
+  }
+  %%TONOS%%
+  if (navigator.vibrate) navigator.vibrate(%%VIB%%);
+} catch (e) {} })();
+</script>"""
+
+
+def _pitido(exito, n):
+    """Pitido de confirmación (agudo = leído; grave doble = no se pudo agregar). Cambia con cada escaneo para que suene una sola vez."""
+    import streamlit.components.v1 as components
+    tonos = "tono(1175, 0, 0.09); tono(1568, 0.10, 0.12);" if exito else "tono(220, 0, 0.18); tono(165, 0.22, 0.30);"
+    components.html(_PLANTILLA_PITIDO.replace("%%N%%", str(n)).replace("%%TONOS%%", tonos)
+                    .replace("%%VIB%%", "[90]" if exito else "[70,60,70]"), height=0)
+
+
+def _mostrar_feedback_scan():
+    """Destello verde con ✓ cuando se leyó el producto; rojo con una palabra cuando no se pudo agregar."""
+    fb = st.session_state.get("pos_fb")
+    if not fb or fb["n"] <= st.session_state.get("pos_fb_visto", 0):
+        return
+    st.session_state["pos_fb_visto"] = fb["n"]
+    exito = fb["estado"] in ("ok", "seleccionado")
+    contenido = "✓" if exito else f"✗ <small>{html.escape(fb.get('motivo') or 'No se pudo agregar')}</small>"
+    with _contenedor(f"scanflash_{fb['n']}"):
+        st.markdown(f'<div class="scan-flash {"ok" if exito else "err"}">{contenido}</div>', unsafe_allow_html=True)
+    if not (exito and fb.get("origen") == "camara"):  # la cámara ya pitó al instante dentro de su propio componente
+        _pitido(exito, fb["n"])
 
 
 def ui_pos_nueva_venta():
@@ -2624,7 +2886,7 @@ def ui_pos_nueva_venta():
 
     # ---------- Escanear ----------
     with card():
-        st.markdown("<h4 style='color:#be185d;'>📷 Escanear productos</h4>", unsafe_allow_html=True)
+        st.markdown("<h4 style='color:var(--raspberry);'>📷 Escanear productos</h4>", unsafe_allow_html=True)
         st.checkbox("Añadir directo al carrito al escanear (si lo desactivas, el producto solo se selecciona abajo para revisarlo)",
                     value=True, key="pos_scan_directo")
         st.text_input("Escanear código de barras", placeholder="Pasa la pistola lectora (o escribe el código) y Enter",
@@ -2636,12 +2898,11 @@ def ui_pos_nueva_venta():
                 st.warning("No se pudo preparar el escáner de cámara. Usa la pistola lectora o escribe el código.")
             else:
                 _pos_procesar_camara(_scanner_component(key="scanner_pos", default=None, modo="continuo"))
-        for estado, msg in reversed(st.session_state.get("pos_scan_log", [])[-4:]):
-            st.caption(f"{_ICONO_SCAN.get(estado, '•')} {msg}")
+        _mostrar_feedback_scan()
 
     # ---------- Agregar a mano ----------
     with card():
-        st.markdown("<h4 style='color:#be185d;'>🛒 Agregar productos</h4>", unsafe_allow_html=True)
+        st.markdown("<h4 style='color:var(--raspberry);'>🛒 Agregar productos</h4>", unsafe_allow_html=True)
         origen = st.radio("Tipo de producto:", ["Del Stock General", "Producto Express (No Registrado)"], horizontal=True, key="pos_origen")
         if origen == "Del Stock General":
             df = pd.read_sql("SELECT id, descripcion, precio, cantidad FROM productos WHERE (id_cliente IS NULL OR id_cliente = '') AND cantidad > 0", conn)
@@ -2693,7 +2954,7 @@ def ui_pos_nueva_venta():
 
     # ---------- Carrito (todo editable) ----------
     with card():
-        st.markdown("<h4 style='color:#be185d;'>🧺 Carrito</h4>", unsafe_allow_html=True)
+        st.markdown("<h4 style='color:var(--raspberry);'>🧺 Carrito</h4>", unsafe_allow_html=True)
         if not carrito:
             st.info("El carrito está vacío. Escanea un producto o agrégalo arriba.")
         else:
@@ -2707,22 +2968,25 @@ def ui_pos_nueva_venta():
             if it.get("id_prod"):
                 fila_stock = c.execute("SELECT cantidad FROM productos WHERE id = ?", (it["id_prod"],)).fetchone()
                 maxq = max(int(fila_stock[0] or 0) if fila_stock else 0, 1)
-            c1, c2, c3, c4, c5 = st.columns([5, 2, 3, 3, 1])
-            with c1:
-                nueva_desc = st.text_input("Descripción", value=it["desc"], key=f"cart_desc_{uid}", label_visibility="collapsed")
-            with c2:
-                nueva_cant = st.number_input("Cantidad", min_value=1, max_value=maxq, value=min(int(it["cant"]), maxq), step=1,
-                                             key=f"cart_qty_{uid}", label_visibility="collapsed")
-            with c3:
-                nuevo_precio = st.number_input("Precio (₡)", min_value=0.0, value=float(it["precio"]), step=500.0,
-                                               key=f"cart_price_{uid}", label_visibility="collapsed")
-            it["desc"] = nueva_desc.strip() or it["desc"]
-            it["cant"] = int(nueva_cant)
-            it["precio"] = float(nuevo_precio)
-            with c4:
-                st.markdown(f"**₡{it['cant'] * it['precio']:,.0f}**")
-            with c5:
-                quitar = st.button("🗑️", key=f"pos_del_{uid}")
+            fb = st.session_state.get("pos_fb")
+            resaltada = bool(fb) and fb.get("uid") == uid and fb.get("estado") == "ok"
+            with _contenedor(f"cartrow_hl_{uid}_{fb['n']}" if resaltada else f"cartrow_{uid}"):
+                c1, c2, c3, c4, c5 = st.columns([5, 2, 3, 3, 1])
+                with c1:
+                    nueva_desc = st.text_input("Descripción", value=it["desc"], key=f"cart_desc_{uid}", label_visibility="collapsed")
+                with c2:
+                    nueva_cant = st.number_input("Cantidad", min_value=1, max_value=maxq, value=min(int(it["cant"]), maxq), step=1,
+                                                 key=f"cart_qty_{uid}", label_visibility="collapsed")
+                with c3:
+                    nuevo_precio = st.number_input("Precio (₡)", min_value=0.0, value=float(it["precio"]), step=500.0,
+                                                   key=f"cart_price_{uid}", label_visibility="collapsed")
+                it["desc"] = nueva_desc.strip() or it["desc"]
+                it["cant"] = int(nueva_cant)
+                it["precio"] = float(nuevo_precio)
+                with c4:
+                    st.markdown(f"**₡{it['cant'] * it['precio']:,.0f}**")
+                with c5:
+                    quitar = st.button("🗑️", key=f"pos_del_{uid}")
             if quitar:
                 carrito.remove(it)
                 st.rerun()
@@ -2737,7 +3001,7 @@ def ui_pos_nueva_venta():
         return
 
     with card():
-        st.markdown("<h4 style='color:#be185d;'>💳 Cobro</h4>", unsafe_allow_html=True)
+        st.markdown("<h4 style='color:var(--raspberry);'>💳 Cobro</h4>", unsafe_allow_html=True)
         c_d1, c_d2 = st.columns(2)
         with c_d1:
             tipo_desc = st.selectbox("Tipo de descuento:", ["Sin Descuento", "Porcentaje (%)", "Monto Fijo (₡)"], key=f"pos_tipo_desc_{n}")
@@ -2844,7 +3108,7 @@ def ui_pos_apartados():
         st.warning(f"⏰ Hay {n_venc} apartado(s) vencido(s). Revisa la pestaña «Vencidos».")
 
     with card():
-        st.markdown("<h4 style='color:#be185d;'>🕒 Apartados</h4>", unsafe_allow_html=True)
+        st.markdown("<h4 style='color:var(--raspberry);'>🕒 Apartados</h4>", unsafe_allow_html=True)
         if not infos:
             st.info("No hay apartados en esta vista. Para crear uno, ve a «Nueva venta» y elige el método «Apartado».")
             return
@@ -2864,7 +3128,7 @@ def ui_pos_apartados():
 
     inf = apartado_info(id_ap)
     with card():
-        st.markdown(f"<h4 style='color:#be185d;'>{inf['folio']} · {nombres[id_ap]}</h4>", unsafe_allow_html=True)
+        st.markdown(f"<h4 style='color:var(--raspberry);'>{inf['folio']} · {nombres[id_ap]}</h4>", unsafe_allow_html=True)
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total", f"₡{inf['total']:,.0f}")
         m2.metric("Pagado", f"₡{inf['neto']:,.0f}")
@@ -2964,7 +3228,7 @@ def ui_pos_historial():
              "Este mes": hoy.strftime("%Y-%m-01"), "Todo": None}[periodo]
 
     with card():
-        st.markdown("<h4 style='color:#be185d;'>💰 Cobrado por método de pago</h4>", unsafe_allow_html=True)
+        st.markdown("<h4 style='color:var(--raspberry);'>💰 Cobrado por método de pago</h4>", unsafe_allow_html=True)
         st.caption("Incluye ventas del POS, pagos de apartados y abonos de cuentas del período.")
         cobros = cobros_por_metodo(desde)
         if cobros:
@@ -2976,7 +3240,7 @@ def ui_pos_historial():
             st.info("No hay cobros en este período.")
 
     with card():
-        st.markdown("<h4 style='color:#be185d;'>🧾 Ventas del POS</h4>", unsafe_allow_html=True)
+        st.markdown("<h4 style='color:var(--raspberry);'>🧾 Ventas del POS</h4>", unsafe_allow_html=True)
         filtro = " WHERE v.fecha >= ?" if desde else ""
         df = pd.read_sql(f"""SELECT v.id, v.folio AS Folio, v.fecha AS Fecha, COALESCE(c.nombre, v.cliente_nombre, 'Venta general') AS Cliente,
                              v.total AS 'Total (₡)', v.metodo_pago AS Método, v.estado AS Estado
@@ -3094,15 +3358,20 @@ def _link_valido(token_url):
     return hmac.compare_digest(str(token_url), str(token))
 
 
+def _emp_permitido():
+    return cfg_get("registro_emp_activo", "1") == "1"
+
+
 def pagina_registro_publico(token_url):
-    """Pantalla pública: solo se llega con el link secreto. No muestra ningún dato de nadie."""
+    """Pantalla pública: solo se llega con el link secreto. Pide lo mismo que cuando registra la administradora
+    (datos, dirección y, para emprendedores, método de envío y talla de caja). No muestra ningún dato de nadie."""
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         logo_path = next((n for n in ["logo.jpg", "logo.png", "logo.jpeg", "21237.jpg"] if os.path.exists(n)), None)
         if logo_path:
             st.image(logo_path)
         else:
-            st.markdown("<h1 style='text-align: center; color: #be185d;'>🛍️ Minici Store</h1>", unsafe_allow_html=True)
+            st.markdown("<h1 style='text-align: center; color:var(--raspberry);'>🛍️ Minici Store</h1>", unsafe_allow_html=True)
 
     if not _link_valido(token_url):
         st.markdown(
@@ -3118,8 +3387,10 @@ def pagina_registro_publico(token_url):
             <p>Tu registro quedó guardado. Este es tu código de acceso:</p></div>""",
             unsafe_allow_html=True)
         with card():
-            st.markdown(f"<h2 style='text-align:center; color:#be185d; letter-spacing:2px;'>{html.escape(ok['id'])}</h2>",
+            st.markdown(f"<h2 style='text-align:center; color:var(--raspberry); letter-spacing:2px;'>{html.escape(ok['id'])}</h2>",
                         unsafe_allow_html=True)
+            if ok.get("detalle"):
+                st.markdown(f"<p style='text-align:center'>{html.escape(ok['detalle'])}</p>", unsafe_allow_html=True)
             st.info("📌 Guarda este código (puedes tomarle captura). Con él entras a ver tus pedidos y abonos.")
             st.markdown('<div style="text-align:center"><a href="?" target="_self">Ingresar a mi cuenta</a></div>',
                         unsafe_allow_html=True)
@@ -3131,17 +3402,28 @@ def pagina_registro_publico(token_url):
 
     st.markdown(
         """<div class="login-hero"><h2>¡Regístrate en Minici Store!</h2>
-        <p>Completa tus datos para crear tu cuenta de clienta.</p></div>""",
+        <p>Completa tus datos para crear tu cuenta.</p></div>""",
         unsafe_allow_html=True)
 
     n = st.session_state.get("pub_n", 0)
     kp = f"pub{n}"
     with card():
+        es_emp = False
+        if _emp_permitido():
+            tipo = st.radio("Quiero registrarme como:", ["🌸 Clienta", "💼 Emprendedor(a)"], horizontal=True, key=f"{kp}_tipo")
+            es_emp = str(tipo).startswith("💼")
         nombre = st.text_input("Nombre completo *", placeholder="Ej. María López", key=f"{kp}_nombre")
         tel = st.text_input("Teléfono / WhatsApp *", placeholder="Ej. 8888 8888", key=f"{kp}_tel")
         correo = st.text_input("Correo electrónico (opcional)", placeholder="correo@ejemplo.com", key=f"{kp}_correo")
         st.markdown("📍 **¿Dónde te entregamos?**")
         prov, canton, distrito, senas = selector_ubicacion(kp)
+        envio_in, nombre_caja_in, precio_caja_in = None, "", 0.0
+        if es_emp:
+            st.markdown("---")
+            st.markdown("🚚 **Envío de tus cajas:**")
+            envio_in = selector_envio(f"{kp}_envio")
+            st.markdown("💼 **Tu caja:**")
+            nombre_caja_in, precio_caja_in = selector_talla_caja(f"{kp}_caja", editar_tc=False)
         st.caption("🔒 Tus datos se usan solo para gestionar tus pedidos y envíos.")
 
         if st.button("✅ Crear mi registro", key=f"{kp}_enviar"):
@@ -3167,11 +3449,14 @@ def pagina_registro_publico(token_url):
                 else:
                     nuevo_id = None
                     for _ in range(3):
-                        cand = siguiente_id_cliente("MIN")
+                        cand = siguiente_id_cliente("EMP" if es_emp else "MIN")
                         try:
                             c.execute("INSERT INTO clientes (id_cliente, nombre, telefono, correo, provincia, canton, distrito, senas, metodo_envio, origen, fecha_registro) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                      (cand, nombre.strip().title(), tel_n, correo.strip(), prov, canton, distrito, senas, None,
-                                       "link", datetime.now().strftime("%Y-%m-%d %H:%M")))
+                                      (cand, nombre.strip().title(), tel_n, correo.strip(), prov, canton, distrito, senas,
+                                       envio_in if es_emp else None, "link", datetime.now().strftime("%Y-%m-%d %H:%M")))
+                            if es_emp:
+                                c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)",
+                                          (cand, nombre_caja_in or "Caja Asignada", precio_caja_in))
                             conn.commit()
                             nuevo_id = cand
                             break
@@ -3179,7 +3464,8 @@ def pagina_registro_publico(token_url):
                             conn.rollback()
                     if nuevo_id:
                         st.session_state["pub_conteo"] = st.session_state.get("pub_conteo", 0) + 1
-                        st.session_state["pub_ok"] = {"nombre": nombre.strip().title(), "id": nuevo_id}
+                        st.session_state["pub_ok"] = {"nombre": nombre.strip().title(), "id": nuevo_id,
+                                                      "detalle": f"{nombre_caja_in} · Envío: {envio_in}" if es_emp else ""}
                         st.rerun()
                     else:
                         st.error("No se pudo completar el registro. Intenta de nuevo en unos segundos.")
@@ -3187,7 +3473,7 @@ def pagina_registro_publico(token_url):
 
 def panel_link_registro():
     """Cuadro del administrador: copiar, compartir, desactivar o cambiar el link de registro."""
-    with st.expander("🔗 Link para que las clientas se registren solas"):
+    with st.expander("🔗 Link para que clientas y emprendedores se registren solos"):
         activo = cfg_get("registro_activo", "1") == "1"
         base = _url_base_app()
         token = _token_registro()
@@ -3200,11 +3486,18 @@ def panel_link_registro():
                         unsafe_allow_html=True)
         else:
             st.warning("No pude detectar la dirección de tu app. Escríbela abajo (ej. https://minici.streamlit.app) y guarda.")
-        st.caption("Solo quien tenga este link puede registrarse. Las clientas nuevas aparecen en tu directorio con su dirección.")
+        st.caption("Solo quien tenga este link puede registrarse. Pide lo mismo que cuando registras tú: datos y dirección; las emprendedoras además eligen su método de envío y la talla de su caja. Aparecen en tu directorio al instante.")
 
         nuevo_activo = st.checkbox("Link activo (las clientas pueden registrarse)", value=activo, key="chk_reg_activo")
         if nuevo_activo != activo:
             cfg_set("registro_activo", "1" if nuevo_activo else "0")
+            st.rerun()
+
+        emp_ok = _emp_permitido()
+        nuevo_emp = st.checkbox("Permitir también el registro de emprendedores (si lo desactivas, el link solo registra clientas)",
+                                value=emp_ok, key="chk_reg_emp")
+        if nuevo_emp != emp_ok:
+            cfg_set("registro_emp_activo", "1" if nuevo_emp else "0")
             st.rerun()
 
         url_in = st.text_input("Dirección de tu app", value=base, placeholder="https://tu-app.streamlit.app", key="inp_url_base")
@@ -3256,7 +3549,7 @@ if st.session_state.user_role is None:
             st.image(logo_path)
         else:
             st.markdown(
-                "<h1 style='text-align: center; color: #be185d;'>🛍️ Minici Store</h1>",
+                "<h1 style='text-align: center; color:var(--raspberry);'>🛍️ Minici Store</h1>",
                 unsafe_allow_html=True,
             )
 
@@ -3491,7 +3784,7 @@ elif st.session_state.user_role == "admin":
             panel_link_registro()
 
             with card():
-                st.markdown("<h4 style='color:#be185d;'>👤 Registrar Nuevo Cliente / Emprendedor</h4>", unsafe_allow_html=True)
+                st.markdown("<h4 style='color:var(--raspberry);'>👤 Registrar Nuevo Cliente / Emprendedor</h4>", unsafe_allow_html=True)
 
                 tipo_registro = st.radio("Tipo de Registro:", ["🌸 Clienta Regular (MIN)", "💼 Emprendedor (EMP)"], horizontal=True, key="tipo_reg_cli")
 
@@ -3505,7 +3798,7 @@ elif st.session_state.user_role == "admin":
                     numeros = [int(str(r[0]).replace("MIN-", "").strip()) for r in rows if r[0] and str(r[0]).startswith("MIN-") and str(r[0]).replace("MIN-", "").strip().isdigit()]
                     nuevo_id = f"MIN-{max(numeros) + 1:04d}" if numeros else "MIN-0001"
 
-                st.markdown(f"🏷️ <span style='font-size:16px; font-weight:bold; color:#be185d;'>Código asignado: {nuevo_id}</span>", unsafe_allow_html=True)
+                st.markdown(f"🏷️ <span style='font-size:16px; font-weight:bold; color:var(--raspberry);'>Código asignado: {nuevo_id}</span>", unsafe_allow_html=True)
                 st.write("")
 
                 n_reg = st.session_state.get("reg_cli_n", 0)
@@ -3550,7 +3843,7 @@ elif st.session_state.user_role == "admin":
                         st.rerun()
 
             with card():
-                st.markdown("<h4 style='color:#be185d;'>📋 Directorio de Clientes y Emprendedores</h4>", unsafe_allow_html=True)
+                st.markdown("<h4 style='color:var(--raspberry);'>📋 Directorio de Clientes y Emprendedores</h4>", unsafe_allow_html=True)
             
                 clientas_todas = pd.read_sql("""
                     SELECT c.id_cliente as Código, c.nombre as Nombre, c.telefono as Teléfono,
@@ -3583,7 +3876,7 @@ elif st.session_state.user_role == "admin":
                         id_cli_exp = clientas_todas.iloc[fila_idx]["Código"]
 
                     st.divider()
-                    st.markdown("<h5 style='color:#be185d;'>🔍 Expediente del Cliente Seleccionado</h5>", unsafe_allow_html=True)
+                    st.markdown("<h5 style='color:var(--raspberry);'>🔍 Expediente del Cliente Seleccionado</h5>", unsafe_allow_html=True)
 
                     if id_cli_exp:
                         c.execute("SELECT nombre, telefono, correo, provincia, canton, distrito, senas, metodo_envio FROM clientes WHERE id_cliente = ?", (id_cli_exp,))
@@ -3764,7 +4057,7 @@ elif st.session_state.user_role == "admin":
                             st.session_state.gestor_cargado_id = id_pedido_actual
 
                         st.divider()
-                        st.markdown(f"<h5 style='color:#be185d;'>Editando el pedido #{id_pedido_actual}</h5>", unsafe_allow_html=True)
+                        st.markdown(f"<h5 style='color:var(--raspberry);'>Editando el pedido #{id_pedido_actual}</h5>", unsafe_allow_html=True)
 
                         foto_pedido = fila_actual["foto_path"]
                         if isinstance(foto_pedido, str) and foto_pedido and os.path.exists(os.path.join("fotos_productos", foto_pedido)):
@@ -3857,7 +4150,7 @@ elif st.session_state.user_role == "admin":
                         mostrar_ticket(id_c, "abono")
 
             with card():
-                st.markdown("<h4 style='color:#be185d;'>📋 Historial de Abonos Recibidos</h4>", unsafe_allow_html=True)
+                st.markdown("<h4 style='color:var(--raspberry);'>📋 Historial de Abonos Recibidos</h4>", unsafe_allow_html=True)
                 abonos_detalle = pd.read_sql("SELECT a.fecha as Fecha, c.id_cliente as Código, c.nombre as Cliente, a.monto_crc as 'Monto Abonado (₡)', COALESCE(a.metodo_pago, '—') as Método FROM abonos a JOIN clientes c ON a.id_cliente = c.id_cliente ORDER BY a.id DESC", conn)
                 if not abonos_detalle.empty:
                     st.dataframe(abonos_detalle)
@@ -3895,7 +4188,7 @@ elif st.session_state.user_role == "admin":
                         else:
                             st.error("Por favor completa la descripción y un monto superior a 0.")
 
-            st.markdown("<h4 style='color:#be185d;'>Últimos Gastos Registrados</h4>", unsafe_allow_html=True)
+            st.markdown("<h4 style='color:var(--raspberry);'>Últimos Gastos Registrados</h4>", unsafe_allow_html=True)
             gastos_df = pd.read_sql("SELECT fecha as Fecha, concepto as Concepto, categoria as Categoria, monto_crc as 'Monto (CRC)', observaciones as Observaciones FROM gastos ORDER BY id DESC LIMIT 10", conn)
             if not gastos_df.empty:
                 st.dataframe(gastos_df)
@@ -3935,7 +4228,7 @@ elif st.session_state.user_role == "admin":
 
             st.write("")
             with card():
-                st.markdown("<h4 style='color:#be185d;'>🕒 Apartados y 💳 cobros por método de pago</h4>", unsafe_allow_html=True)
+                st.markdown("<h4 style='color:var(--raspberry);'>🕒 Apartados y 💳 cobros por método de pago</h4>", unsafe_allow_html=True)
                 ca1, ca2, ca3 = st.columns(3)
                 ca1.metric("Apartados activos", f"{ap['activos']}")
                 ca2.metric("Por cobrar en apartados", f"₡{ap['por_cobrar']:,.0f}")
@@ -3948,7 +4241,7 @@ elif st.session_state.user_role == "admin":
 
             st.write("")
             with card():
-                st.markdown("<h4 style='color:#be185d;'>📥 Exportar Reporte Financiero Completo</h4>", unsafe_allow_html=True)
+                st.markdown("<h4 style='color:var(--raspberry);'>📥 Exportar Reporte Financiero Completo</h4>", unsafe_allow_html=True)
 
                 output = io.BytesIO()
                 wb = openpyxl.Workbook()
@@ -4039,7 +4332,7 @@ elif st.session_state.user_role == "admin":
             )
             
             with card():
-                st.markdown("<h4 style='color:#be185d;'>➕ Añadir Nuevo Producto al Inventario</h4>", unsafe_allow_html=True)
+                st.markdown("<h4 style='color:var(--raspberry);'>➕ Añadir Nuevo Producto al Inventario</h4>", unsafe_allow_html=True)
 
                 # El escáner va fuera del formulario para poder llenar el campo del código al instante
                 escanear_codigo_barras("new_stock", label="📷 Escanear código de barras con la cámara (opcional)")
@@ -4073,12 +4366,12 @@ elif st.session_state.user_role == "admin":
                             st.error("Debes ingresar al menos la descripción del producto.")
             
             with card():
-                st.markdown("<h4 style='color:#be185d;'>📊 Tabla de Inventario (Stock General)</h4>", unsafe_allow_html=True)
+                st.markdown("<h4 style='color:var(--raspberry);'>📊 Tabla de Inventario (Stock General)</h4>", unsafe_allow_html=True)
                 df_stock_table = pd.read_sql("SELECT id, codigo_barras as 'Cód. Barras', descripcion as Producto, tienda as Tienda, categoria as Categoría, precio as Precio, cantidad as Stock FROM productos WHERE id_cliente IS NULL OR id_cliente = ''", conn)
                 st.dataframe(df_stock_table)
 
             with card():
-                st.markdown("<h4 style='color:#be185d;'>✏️ Editar Producto del Stock</h4>", unsafe_allow_html=True)
+                st.markdown("<h4 style='color:var(--raspberry);'>✏️ Editar Producto del Stock</h4>", unsafe_allow_html=True)
                 if not df_stock_table.empty:
                     prod_edit_dict = {f"ID: {r['id']} - {r['Producto']}": r['id'] for _, r in df_stock_table.iterrows()}
                     prod_edit_sel = st.selectbox("Seleccionar producto a editar:", list(prod_edit_dict.keys()), key="inv_edit_sel")
@@ -4123,7 +4416,7 @@ elif st.session_state.user_role == "admin":
                     st.info("No hay productos en el stock general para editar.")
             
             with card():
-                st.markdown("<h4 style='color:#be185d;'>📸 Galería de Productos Locales</h4>", unsafe_allow_html=True)
+                st.markdown("<h4 style='color:var(--raspberry);'>📸 Galería de Productos Locales</h4>", unsafe_allow_html=True)
                 df_stock = pd.read_sql("SELECT id, descripcion, precio, cantidad, categoria, tienda, foto_path, codigo_barras FROM productos WHERE id_cliente IS NULL OR id_cliente = ''", conn)
             
                 if df_stock.empty:
@@ -4181,7 +4474,7 @@ elif st.session_state.user_role == "client":
             st.rerun()
 
     with card():
-        st.markdown("<h4 style='color:#be185d;'>💰 Estado de Cuenta</h4>", unsafe_allow_html=True)
+        st.markdown("<h4 style='color:var(--raspberry);'>💰 Estado de Cuenta</h4>", unsafe_allow_html=True)
         if caja_nombre_c:
             st.caption(f"💼 Caja Asignada: **{caja_nombre_c}** | Cuota: **₡{caja_precio_c:,.0f}**")
         
@@ -4193,14 +4486,14 @@ elif st.session_state.user_role == "client":
     notifs = pd.read_sql("SELECT titulo, mensaje, fecha FROM notificaciones WHERE id_cliente = ? ORDER BY id DESC LIMIT 5", conn, params=(id_cli,))
     if not notifs.empty:
         with card():
-            st.markdown("<h4 style='color:#be185d;'>🔔 Notificaciones Recientes</h4>", unsafe_allow_html=True)
+            st.markdown("<h4 style='color:var(--raspberry);'>🔔 Notificaciones Recientes</h4>", unsafe_allow_html=True)
             for _, row in notifs.iterrows():
                 st.markdown(f"**{row['titulo']}** ({row['fecha']})")
                 st.caption(row["mensaje"])
                 st.divider()
 
     with card():
-        st.markdown("<h4 style='color:#be185d;'>📦 Tus Pedidos / Artículos</h4>", unsafe_allow_html=True)
+        st.markdown("<h4 style='color:var(--raspberry);'>📦 Tus Pedidos / Artículos</h4>", unsafe_allow_html=True)
         if prods.empty:
             st.info("Aún no tienes artículos registrados.")
         else:

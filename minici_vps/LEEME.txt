@@ -1,0 +1,17 @@
+ARCHIVOS PARA EL SERVIDOR DE MINICI STORE
+=========================================
+Estos archivos acompañan la "Guía Técnica Completa: Despliegue de Minici Store en Servidor VPS (v2)".
+Cada fase de la guía te dice cuándo y dónde usar cada uno.
+
+  requirements.txt              -> va dentro de la carpeta del proyecto (junto a app.py).
+  .gitignore                    -> va junto a app.py. Evita que tus datos suban a GitHub.
+  .streamlit/config.toml        -> va dentro de la carpeta del proyecto, en la subcarpeta .streamlit
+  .streamlit/secrets.toml.ejemplo -> cópialo como secrets.toml en el SERVIDOR y cambia los valores.
+  minici.service                -> se copia en el servidor a /etc/systemd/system/minici.service
+  nginx-minici.conf             -> se copia en el servidor a /etc/nginx/sites-available/minici
+  actualizar.sh                 -> va junto a app.py (en el servidor). Para actualizar la app.
+  respaldo_diario.sh            -> va junto a app.py (en el servidor). Copia diaria de los datos.
+
+IMPORTANTE: los archivos .sh y .service deben tener saltos de línea de Linux (LF).
+Si los abres y guardas con el Bloc de notas de Windows pueden dañarse; usa VS Code
+(abajo a la derecha debe decir "LF", no "CRLF").

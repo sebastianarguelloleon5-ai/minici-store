@@ -3481,7 +3481,7 @@ def panel_link_registro():
             link = f"{base}/?registro={token}"
             st.markdown("**Pásales este link** (toca el ícono de la derecha para copiarlo):")
             st.code(link, language=None)
-            msg = f"¡Hola! 💖 Regístrate en Minici Store con este link: {link}"
+            msg = f"¡Hola! 💖 Regístrate en Minici Store con este link: {link} "
             st.markdown(f'<a href="https://wa.me/?text={urllib.parse.quote(msg)}" target="_blank" class="btn-whatsapp">📲 Compartir por WhatsApp</a>',
                         unsafe_allow_html=True)
         else:

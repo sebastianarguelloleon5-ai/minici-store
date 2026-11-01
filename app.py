@@ -1046,22 +1046,20 @@ def render_factura_imagen(doc):
 # ---------- 2) Datos comunes de la clienta ----------
 def _info_cliente(id_cliente):
     """Datos de la clienta listos para los comprobantes. None si no existe."""
-    r = c.execute("SELECT nombre, telefono, provincia, canton, distrito, senas, metodo_envio FROM clientes WHERE id_cliente = ?", (id_cliente,)).fetchone()
+    r = c.execute("SELECT nombre, telefono, provincia, canton, distrito, senas FROM clientes WHERE id_cliente = ?", (id_cliente,)).fetchone()
     if not r:
         return None
-    nombre, tel, prov, canton, distrito, senas, envio = r
+    nombre, tel, prov, canton, distrito, senas = r
     ubic = texto_ubicacion(prov, canton, distrito)
-    extra = ([f"Envío: {envio}"] if envio else []) + ([ubic] if ubic else [])
+    extra = [ubic] if ubic else []
     t_lineas = []
     if tel:
         t_lineas.append((f"Tel: {tel}", False))
-    if envio:
-        t_lineas.append((f"Envío: {envio}", False))
     if ubic:
         t_lineas.append((f"Dir: {ubic}", False))
     if senas:
         t_lineas.append((str(senas), True))
-    return {"nombre": nombre, "telefono": tel, "ubic": ubic, "envio": envio, "senas": senas,
+    return {"nombre": nombre, "telefono": tel, "ubic": ubic, "senas": senas,
             "lineas_img": [f"Tel: {tel if tel else 'No registrado'}"] + (["   ·   ".join(extra)] if extra else []),
             "lineas_ticket": t_lineas}
 
@@ -2100,7 +2098,6 @@ UBICACIONES_CR = {
                    "Parrita", "Corredores", "Garabito", "Monteverde", "Puerto Jiménez"],
     "Limón": ["Limón", "Pococí", "Siquirres", "Talamanca", "Matina", "Guácimo"],
 }
-METODOS_ENVIO = ["Correos de Costa Rica", "Encomiendas Tabo"]
 
 
 def texto_ubicacion(provincia, canton, distrito):
@@ -2128,12 +2125,6 @@ def selector_ubicacion(key_prefix, actual=None):
     senas = st.text_input("Otras señas (opcional)", value=actual.get("senas") or "",
                           placeholder="Ej. 200 m norte de la iglesia, casa blanca", key=f"{key_prefix}_senas")
     return prov, canton, titulo_es(distrito), senas.strip()
-
-
-def selector_envio(key, actual=None):
-    return st.radio("Método de envío", METODOS_ENVIO,
-                    index=METODOS_ENVIO.index(actual) if actual in METODOS_ENVIO else 0,
-                    horizontal=True, key=key)
 
 
 # ==========================================
@@ -3358,10 +3349,6 @@ def _link_valido(token_url):
     return hmac.compare_digest(str(token_url), str(token))
 
 
-def _emp_permitido():
-    return cfg_get("registro_emp_activo", "1") == "1"
-
-
 def pagina_registro_publico(token_url):
     """Pantalla pública: solo se llega con el link secreto. Pide lo mismo que cuando registra la administradora
     (datos, dirección y, para emprendedores, método de envío y talla de caja). No muestra ningún dato de nadie."""
@@ -3408,22 +3395,11 @@ def pagina_registro_publico(token_url):
     n = st.session_state.get("pub_n", 0)
     kp = f"pub{n}"
     with card():
-        es_emp = False
-        if _emp_permitido():
-            tipo = st.radio("Quiero registrarme como:", ["🌸 Clienta", "💼 Emprendedor(a)"], horizontal=True, key=f"{kp}_tipo")
-            es_emp = str(tipo).startswith("💼")
         nombre = st.text_input("Nombre completo *", placeholder="Ej. María López", key=f"{kp}_nombre")
         tel = st.text_input("Teléfono / WhatsApp *", placeholder="Ej. 8888 8888", key=f"{kp}_tel")
         correo = st.text_input("Correo electrónico (opcional)", placeholder="correo@ejemplo.com", key=f"{kp}_correo")
         st.markdown("📍 **¿Dónde te entregamos?**")
         prov, canton, distrito, senas = selector_ubicacion(kp)
-        envio_in, nombre_caja_in, precio_caja_in = None, "", 0.0
-        if es_emp:
-            st.markdown("---")
-            st.markdown("🚚 **Envío de tus cajas:**")
-            envio_in = selector_envio(f"{kp}_envio")
-            st.markdown("💼 **Tu caja:**")
-            nombre_caja_in, precio_caja_in = selector_talla_caja(f"{kp}_caja", editar_tc=False)
         st.caption("🔒 Tus datos se usan solo para gestionar tus pedidos y envíos.")
 
         if st.button("✅ Crear mi registro", key=f"{kp}_enviar"):
@@ -3449,14 +3425,11 @@ def pagina_registro_publico(token_url):
                 else:
                     nuevo_id = None
                     for _ in range(3):
-                        cand = siguiente_id_cliente("EMP" if es_emp else "MIN")
+                        cand = siguiente_id_cliente("MIN")
                         try:
-                            c.execute("INSERT INTO clientes (id_cliente, nombre, telefono, correo, provincia, canton, distrito, senas, metodo_envio, origen, fecha_registro) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                            c.execute("INSERT INTO clientes (id_cliente, nombre, telefono, correo, provincia, canton, distrito, senas, origen, fecha_registro) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                       (cand, nombre.strip().title(), tel_n, correo.strip(), prov, canton, distrito, senas,
-                                       envio_in if es_emp else None, "link", datetime.now().strftime("%Y-%m-%d %H:%M")))
-                            if es_emp:
-                                c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)",
-                                          (cand, nombre_caja_in or "Caja Asignada", precio_caja_in))
+                                       "link", datetime.now().strftime("%Y-%m-%d %H:%M")))
                             conn.commit()
                             nuevo_id = cand
                             break
@@ -3465,7 +3438,7 @@ def pagina_registro_publico(token_url):
                     if nuevo_id:
                         st.session_state["pub_conteo"] = st.session_state.get("pub_conteo", 0) + 1
                         st.session_state["pub_ok"] = {"nombre": nombre.strip().title(), "id": nuevo_id,
-                                                      "detalle": f"{nombre_caja_in} · Envío: {envio_in}" if es_emp else ""}
+                                                      "detalle": ""}
                         st.rerun()
                     else:
                         st.error("No se pudo completar el registro. Intenta de nuevo en unos segundos.")
@@ -3486,18 +3459,11 @@ def panel_link_registro():
                         unsafe_allow_html=True)
         else:
             st.warning("No pude detectar la dirección de tu app. Escríbela abajo (ej. https://minici.streamlit.app) y guarda.")
-        st.caption("Solo quien tenga este link puede registrarse. Pide lo mismo que cuando registras tú: datos y dirección; las emprendedoras además eligen su método de envío y la talla de su caja. Aparecen en tu directorio al instante.")
+        st.caption("Solo quien tenga este link puede registrarse. Pide nombre, teléfono, correo y dirección. Aparecen en tu directorio al instante.")
 
         nuevo_activo = st.checkbox("Link activo (las clientas pueden registrarse)", value=activo, key="chk_reg_activo")
         if nuevo_activo != activo:
             cfg_set("registro_activo", "1" if nuevo_activo else "0")
-            st.rerun()
-
-        emp_ok = _emp_permitido()
-        nuevo_emp = st.checkbox("Permitir también el registro de emprendedores (si lo desactivas, el link solo registra clientas)",
-                                value=emp_ok, key="chk_reg_emp")
-        if nuevo_emp != emp_ok:
-            cfg_set("registro_emp_activo", "1" if nuevo_emp else "0")
             st.rerun()
 
         url_in = st.text_input("Dirección de tu app", value=base, placeholder="https://tu-app.streamlit.app", key="inp_url_base")
@@ -3810,11 +3776,9 @@ elif st.session_state.user_role == "admin":
                 st.markdown("📍 **Dirección:**")
                 prov_in, canton_in, distrito_in, senas_in = selector_ubicacion(kr)
 
-                nombre_caja_in, precio_caja_in, envio_in = "", 0.0, None
+                nombre_caja_in, precio_caja_in = "", 0.0
                 if "EMP" in tipo_registro:
                     st.markdown("---")
-                    st.markdown("🚚 **Envío de las cajas:**")
-                    envio_in = selector_envio(f"{kr}_envio")
                     st.markdown("💼 **Configuración de Caja para Emprendedor:**")
                     nombre_caja_in, precio_caja_in = selector_talla_caja(f"{kr}_caja")
 
@@ -3832,8 +3796,8 @@ elif st.session_state.user_role == "admin":
                         st.error("Falta completar: " + ", ".join(faltan) + ".")
                     else:
                         nombre_clean = nombre.strip().title()
-                        c.execute("INSERT OR REPLACE INTO clientes (id_cliente, nombre, telefono, correo, provincia, canton, distrito, senas, metodo_envio) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                  (nuevo_id, nombre_clean, tel.strip(), correo.strip(), prov_in, canton_in, distrito_in, senas_in, envio_in))
+                        c.execute("INSERT OR REPLACE INTO clientes (id_cliente, nombre, telefono, correo, provincia, canton, distrito, senas) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                  (nuevo_id, nombre_clean, tel.strip(), correo.strip(), prov_in, canton_in, distrito_in, senas_in))
                         if "EMP" in tipo_registro:
                             caja_clean = nombre_caja_in or "Caja Asignada"
                             c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)", (nuevo_id, caja_clean, precio_caja_in))
@@ -3848,7 +3812,6 @@ elif st.session_state.user_role == "admin":
                 clientas_todas = pd.read_sql("""
                     SELECT c.id_cliente as Código, c.nombre as Nombre, c.telefono as Teléfono,
                            c.provincia as _prov, c.canton as _cant, c.distrito as _dist,
-                           COALESCE(c.metodo_envio, '—') as 'Envío',
                            COALESCE(e.nombre_caja, 'N/A') as 'Caja', COALESCE(e.precio_caja, 0.0) as 'Precio Caja (₡)'
                     FROM clientes c 
                     LEFT JOIN cajas_emprendedores e ON c.id_cliente = e.id_cliente 
@@ -3879,7 +3842,7 @@ elif st.session_state.user_role == "admin":
                     st.markdown("<h5 style='color:var(--raspberry);'>🔍 Expediente del Cliente Seleccionado</h5>", unsafe_allow_html=True)
 
                     if id_cli_exp:
-                        c.execute("SELECT nombre, telefono, correo, provincia, canton, distrito, senas, metodo_envio FROM clientes WHERE id_cliente = ?", (id_cli_exp,))
+                        c.execute("SELECT nombre, telefono, correo, provincia, canton, distrito, senas FROM clientes WHERE id_cliente = ?", (id_cli_exp,))
                         info_cli = c.fetchone()
 
                         c.execute("SELECT nombre_caja, precio_caja FROM cajas_emprendedores WHERE id_cliente = ?", (id_cli_exp,))
@@ -3902,20 +3865,17 @@ elif st.session_state.user_role == "admin":
 
                             st.write("")
                             with card("sub"):
-                                st.markdown("📍 **Dirección y envío:**")
+                                st.markdown("📍 **Dirección:**")
                                 _dir_actual = {"provincia": info_cli[3], "canton": info_cli[4], "distrito": info_cli[5], "senas": info_cli[6]}
                                 ed_prov, ed_canton, ed_distrito, ed_senas = selector_ubicacion(f"exp_dir_{id_cli_exp}", _dir_actual)
-                                ed_envio = None
-                                if id_cli_exp.startswith("EMP-"):
-                                    ed_envio = selector_envio(f"exp_env_{id_cli_exp}", info_cli[7])
-                                if st.button("💾 Guardar dirección y envío", key=f"btn_dir_{id_cli_exp}"):
+                                if st.button("💾 Guardar dirección", key=f"btn_dir_{id_cli_exp}"):
                                     if not (ed_prov and ed_canton and ed_distrito):
                                         st.error("Completa provincia, cantón y distrito.")
                                     else:
-                                        c.execute("UPDATE clientes SET provincia=?, canton=?, distrito=?, senas=?, metodo_envio=? WHERE id_cliente=?",
-                                                  (ed_prov, ed_canton, ed_distrito, ed_senas, ed_envio, id_cli_exp))
+                                        c.execute("UPDATE clientes SET provincia=?, canton=?, distrito=?, senas=? WHERE id_cliente=?",
+                                                  (ed_prov, ed_canton, ed_distrito, ed_senas, id_cli_exp))
                                         conn.commit()
-                                        flash("success", "¡Dirección y envío actualizados!")
+                                        flash("success", "¡Dirección actualizada!")
                                         st.rerun()
 
                             if id_cli_exp.startswith("EMP-"):

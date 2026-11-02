@@ -2158,25 +2158,16 @@ def selector_talla_caja(key_prefix, nombre_actual=None, editar_tc=True):
     Con editar_tc=False (registro público) usa el tipo de cambio guardado y no lo muestra para editar."""
     tallas = list(TALLAS_CAJA_USD.keys())
     actual = talla_desde_nombre(nombre_actual)
-    c1, c2 = st.columns(2)
-    with c1:
-        talla = st.selectbox(
-            "Talla de la caja", tallas,
-            index=tallas.index(actual) if actual else 1,
-            format_func=lambda t: f"{t} — US${TALLAS_CAJA_USD[t]:,.0f}",
-            key=f"{key_prefix}_talla",
-        )
+    talla = st.selectbox(
+        "Talla de la caja", tallas,
+        index=tallas.index(actual) if actual else 1,
+        format_func=lambda t: f"{t} — US${TALLAS_CAJA_USD[t]:,.0f}",
+        key=f"{key_prefix}_talla",
+    )
     tc = tipo_cambio_actual()
-    if editar_tc:
-        with c2:
-            tc = st.number_input("Tipo de cambio (₡ por US$1)", min_value=1.0,
-                                 value=float(tc), step=1.0,
-                                 key=f"{key_prefix}_tc")
-        if abs(tc - tipo_cambio_actual()) > 0.001:
-            cfg_set("tipo_cambio_crc", tc)  # queda como el valor por defecto de los próximos registros
     usd = TALLAS_CAJA_USD[talla]
     crc = round(usd * tc)
-    st.caption(f"💵 Talla {talla}: US${usd:,.0f} × ₡{tc:,.0f} = **₡{crc:,.0f}**")
+    st.caption(f"💵 Talla {talla}: **US${usd:,.0f}**")
     if nombre_actual and not actual:
         st.caption(f"ℹ️ Caja actual (sin talla): {nombre_actual}. Al guardar se reemplaza por la talla elegida.")
     return f"Talla {talla}", float(crc)
@@ -3349,6 +3340,10 @@ def _link_valido(token_url):
     return hmac.compare_digest(str(token_url), str(token))
 
 
+def _emp_permitido():
+    return cfg_get("registro_emp_activo", "1") == "1"
+
+
 def pagina_registro_publico(token_url):
     """Pantalla pública: solo se llega con el link secreto. Pide lo mismo que cuando registra la administradora
     (datos, dirección y, para emprendedores, método de envío y talla de caja). No muestra ningún dato de nadie."""
@@ -3395,11 +3390,20 @@ def pagina_registro_publico(token_url):
     n = st.session_state.get("pub_n", 0)
     kp = f"pub{n}"
     with card():
+        es_emp = False
+        if _emp_permitido():
+            tipo = st.radio("Quiero registrarme como:", ["🌸 Clienta", "💼 Emprendedor(a)"], horizontal=True, key=f"{kp}_tipo")
+            es_emp = str(tipo).startswith("💼")
         nombre = st.text_input("Nombre completo *", placeholder="Ej. María López", key=f"{kp}_nombre")
         tel = st.text_input("Teléfono / WhatsApp *", placeholder="Ej. 8888 8888", key=f"{kp}_tel")
         correo = st.text_input("Correo electrónico (opcional)", placeholder="correo@ejemplo.com", key=f"{kp}_correo")
         st.markdown("📍 **¿Dónde te entregamos?**")
         prov, canton, distrito, senas = selector_ubicacion(kp)
+        nombre_caja_in, precio_caja_in = "", 0.0
+        if es_emp:
+            st.markdown("---")
+            st.markdown("💼 **Tu caja:**")
+            nombre_caja_in, precio_caja_in = selector_talla_caja(f"{kp}_caja", editar_tc=False)
         st.caption("🔒 Tus datos se usan solo para gestionar tus pedidos y envíos.")
 
         if st.button("✅ Crear mi registro", key=f"{kp}_enviar"):
@@ -3425,11 +3429,14 @@ def pagina_registro_publico(token_url):
                 else:
                     nuevo_id = None
                     for _ in range(3):
-                        cand = siguiente_id_cliente("MIN")
+                        cand = siguiente_id_cliente("EMP" if es_emp else "MIN")
                         try:
                             c.execute("INSERT INTO clientes (id_cliente, nombre, telefono, correo, provincia, canton, distrito, senas, origen, fecha_registro) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                       (cand, nombre.strip().title(), tel_n, correo.strip(), prov, canton, distrito, senas,
                                        "link", datetime.now().strftime("%Y-%m-%d %H:%M")))
+                            if es_emp:
+                                c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)",
+                                          (cand, nombre_caja_in or "Caja Asignada", precio_caja_in))
                             conn.commit()
                             nuevo_id = cand
                             break
@@ -3438,7 +3445,7 @@ def pagina_registro_publico(token_url):
                     if nuevo_id:
                         st.session_state["pub_conteo"] = st.session_state.get("pub_conteo", 0) + 1
                         st.session_state["pub_ok"] = {"nombre": nombre.strip().title(), "id": nuevo_id,
-                                                      "detalle": ""}
+                                                      "detalle": nombre_caja_in if es_emp else ""}
                         st.rerun()
                     else:
                         st.error("No se pudo completar el registro. Intenta de nuevo en unos segundos.")
@@ -3459,11 +3466,18 @@ def panel_link_registro():
                         unsafe_allow_html=True)
         else:
             st.warning("No pude detectar la dirección de tu app. Escríbela abajo (ej. https://minici.streamlit.app) y guarda.")
-        st.caption("Solo quien tenga este link puede registrarse. Pide nombre, teléfono, correo y dirección. Aparecen en tu directorio al instante.")
+        st.caption("Solo quien tenga este link puede registrarse. Pide lo mismo que cuando registras tú: datos y dirección; las emprendedoras además eligen la talla de su caja. Aparecen en tu directorio al instante.")
 
         nuevo_activo = st.checkbox("Link activo (las clientas pueden registrarse)", value=activo, key="chk_reg_activo")
         if nuevo_activo != activo:
             cfg_set("registro_activo", "1" if nuevo_activo else "0")
+            st.rerun()
+
+        emp_ok = _emp_permitido()
+        nuevo_emp = st.checkbox("Permitir también el registro de emprendedores (si lo desactivas, el link solo registra clientas)",
+                                value=emp_ok, key="chk_reg_emp")
+        if nuevo_emp != emp_ok:
+            cfg_set("registro_emp_activo", "1" if nuevo_emp else "0")
             st.rerun()
 
         url_in = st.text_input("Dirección de tu app", value=base, placeholder="https://tu-app.streamlit.app", key="inp_url_base")

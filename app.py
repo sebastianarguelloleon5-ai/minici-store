@@ -2861,6 +2861,16 @@ def _mostrar_feedback_scan():
         _pitido(exito, fb["n"])
 
 
+def _pos_quitar_linea(uid):
+    """Quita una línea del carrito por su uid (sirve para líneas escaneadas o agregadas a mano)."""
+    st.session_state["pos_cart"] = [i for i in st.session_state.get("pos_cart", []) if i.get("uid") != uid]
+    for pref in ("cart_desc_", "cart_qty_", "cart_price_"):
+        st.session_state.pop(f"{pref}{uid}", None)
+    fb = st.session_state.get("pos_fb")
+    if fb and fb.get("uid") == uid:
+        fb["uid"] = None  # evita resaltar una línea que ya no existe
+
+
 def ui_pos_nueva_venta():
     carrito = st.session_state.setdefault("pos_cart", [])
     n = st.session_state.get("pos_n", 0)
@@ -2968,10 +2978,7 @@ def ui_pos_nueva_venta():
                 with c4:
                     st.markdown(f"**₡{it['cant'] * it['precio']:,.0f}**")
                 with c5:
-                    quitar = st.button("🗑️", key=f"pos_del_{uid}")
-            if quitar:
-                carrito.remove(it)
-                st.rerun()
+                    st.button("🗑️", key=f"pos_del_{uid}", on_click=_pos_quitar_linea, args=(uid,))
         subtotal = _total_carrito(carrito)
         if carrito:
             st.markdown(f"Subtotal: **₡{subtotal:,.0f}**")
@@ -3658,6 +3665,27 @@ elif st.session_state.user_role == "admin":
                 unsafe_allow_html=True,
             )
 
+            _post = st.session_state.get("compra_post")
+            if _post:
+                with card():
+                    st.success(f"¡Compra de '{_post['prod']}' registrada exitosamente para {_post['id']}!")
+                    path_fac, link_wa = generar_factura_imagen(_post["id"])
+                    if path_fac and os.path.exists(path_fac):
+                        with open(path_fac, "rb") as file:
+                            st.download_button(
+                                label="📥 Descargar Factura en Imagen (para WhatsApp)",
+                                data=file,
+                                file_name=f"Factura_{_post['id']}.jpg",
+                                mime="image/jpeg",
+                                key="dl_factura_compra"
+                            )
+                    if link_wa:
+                        st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Mensaje por WhatsApp</a>', unsafe_allow_html=True)
+                    mostrar_ticket(_post["id"], "compra")
+                    if st.button("✖️ Cerrar", key="btn_cerrar_post_compra"):
+                        st.session_state.pop("compra_post", None)
+                        st.rerun()
+
             with card():
             
                 filtro_tipo_cli = st.radio("Filtrar Tipo de Cliente:", ["Todos", "Clientas Regulares (MIN)", "Emprendedores (EMP)"], horizontal=True, key="compra_filtro_cli")
@@ -3683,12 +3711,12 @@ elif st.session_state.user_role == "admin":
                     with col_tienda:
                         st.markdown('<p class="section-title">2. Tienda</p>', unsafe_allow_html=True)
                         tienda_sel = st.selectbox("Tienda", ["Zara", "Guess", "Adidas", "Shein", "Amazon", "Nike", "Victoria's Secret", "Otra"], label_visibility="collapsed", key="compra_tienda")
-                        tienda = st.text_input("Escribe tienda", placeholder="Tienda...") if tienda_sel == "Otra" else tienda_sel
+                        tienda = st.text_input("Escribe tienda", placeholder="Tienda...", key="compra_tienda_otra") if tienda_sel == "Otra" else tienda_sel
 
                     with col_cat:
                         st.markdown('<p class="section-title">3. Categoría</p>', unsafe_allow_html=True)
                         cat_sel = st.selectbox("Categoría", ["Vestido", "Bolso", "Tenis", "Blusa", "Cosméticos", "Accesorios", "Otra"], label_visibility="collapsed", key="compra_cat")
-                        categoria = st.text_input("Escribe categoría", placeholder="Categoría...") if cat_sel == "Otra" else cat_sel
+                        categoria = st.text_input("Escribe categoría", placeholder="Categoría...", key="compra_cat_otra") if cat_sel == "Otra" else cat_sel
 
                     st.markdown('<p class="section-title">4. Producto / Artículo</p>', unsafe_allow_html=True)
                     producto = st.text_input("Producto", placeholder="Ej. Vestido estampado", label_visibility="collapsed", key="compra_prod")
@@ -3706,7 +3734,8 @@ elif st.session_state.user_role == "admin":
 
                     st.markdown('<p class="section-title">8. Fotos del producto</p>', unsafe_allow_html=True)
                     metodo_foto = st.radio("Cargar foto desde:", ["Subir archivo", "Usar cámara"], horizontal=True, key="compra_foto_modo")
-                    foto_file = st.file_uploader("Subir foto", type=["jpg", "png", "jpeg"], label_visibility="collapsed", key="compra_file") if metodo_foto == "Subir archivo" else st.camera_input("Tomar foto", key="compra_cam")
+                    uk = st.session_state.get("uploader_key", 0)
+                    foto_file = st.file_uploader("Subir foto", type=["jpg", "png", "jpeg"], label_visibility="collapsed", key=f"compra_file_{uk}") if metodo_foto == "Subir archivo" else st.camera_input("Tomar foto", key=f"compra_cam_{uk}")
 
                     st.markdown('<p class="section-title">9. Observaciones</p>', unsafe_allow_html=True)
                     observaciones = st.text_area("Observaciones", height=70, label_visibility="collapsed", key="compra_obs")
@@ -3734,22 +3763,18 @@ elif st.session_state.user_role == "admin":
                             c.execute("""INSERT INTO notificaciones (id_cliente, titulo, mensaje, fecha) VALUES (?, ?, ?, ?)""",
                                       (id_cliente, "Nuevo pedido registrado", f"Se agregó '{prod_clean}' ({tienda_clean}) a tus compras por ₡{precio:,.0f}.", datetime.now().strftime("%Y-%m-%d %H:%M")))
                             conn.commit()
-                            st.success(f"¡Compra de '{prod_clean}' registrada exitosamente para {id_cliente}!")
+                            # Guardar datos para mostrar la factura después del rerun
+                            st.session_state["compra_post"] = {"id": id_cliente, "prod": prod_clean}
 
-                            path_fac, link_wa = generar_factura_imagen(id_cliente)
-                            if path_fac and os.path.exists(path_fac):
-                                st.success("🖼️ ¡Factura digital en imagen generada con éxito!")
-                                with open(path_fac, "rb") as file:
-                                    st.download_button(
-                                        label="📥 Descargar Factura en Imagen (para WhatsApp)",
-                                        data=file,
-                                        file_name=f"Factura_{id_cliente}.jpg",
-                                        mime="image/jpeg",
-                                        key="dl_factura_compra"
-                                    )
-                            if link_wa:
-                                st.markdown(f'<a href="{link_wa}" target="_blank" class="btn-whatsapp">📲 Enviar Mensaje por WhatsApp</a>', unsafe_allow_html=True)
-                            mostrar_ticket(id_cliente, "compra")
+                            # Limpiar los widgets del formulario (menos el cliente/filtro y el aviso de éxito)
+                            _conservar = {"compra_cli", "compra_filtro_cli", "compra_post"}
+                            for _k in [k for k in list(st.session_state.keys())
+                                       if str(k).startswith("compra_") and k not in _conservar]:
+                                del st.session_state[_k]
+
+                            # Forzar un uploader/cámara nuevo
+                            st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
+                            st.rerun()
 
         # 2. Clientes y Expedientes
         elif menu_principal == "👩 Clientes y Expedientes":

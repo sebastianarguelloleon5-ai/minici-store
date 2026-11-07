@@ -3686,6 +3686,8 @@ elif st.session_state.user_role == "admin":
                         st.session_state.pop("compra_post", None)
                         st.rerun()
 
+            _cn = st.session_state.get("uploader_key", 0)  # contador: cambia en cada guardado y reinicia todos los campos
+
             with card():
             
                 filtro_tipo_cli = st.radio("Filtrar Tipo de Cliente:", ["Todos", "Clientas Regulares (MIN)", "Emprendedores (EMP)"], horizontal=True, key="compra_filtro_cli")
@@ -3710,35 +3712,35 @@ elif st.session_state.user_role == "admin":
                     col_tienda, col_cat = st.columns(2)
                     with col_tienda:
                         st.markdown('<p class="section-title">2. Tienda</p>', unsafe_allow_html=True)
-                        tienda_sel = st.selectbox("Tienda", ["Zara", "Guess", "Adidas", "Shein", "Amazon", "Nike", "Victoria's Secret", "Otra"], label_visibility="collapsed", key="compra_tienda")
-                        tienda = st.text_input("Escribe tienda", placeholder="Tienda...", key="compra_tienda_otra") if tienda_sel == "Otra" else tienda_sel
+                        tienda_sel = st.selectbox("Tienda", ["Zara", "Guess", "Adidas", "Shein", "Amazon", "Nike", "Victoria's Secret", "Otra"], label_visibility="collapsed", key=f"compra_tienda_{_cn}")
+                        tienda = st.text_input("Escribe tienda", placeholder="Tienda...", key=f"compra_tienda_otra_{_cn}") if tienda_sel == "Otra" else tienda_sel
 
                     with col_cat:
                         st.markdown('<p class="section-title">3. Categoría</p>', unsafe_allow_html=True)
-                        cat_sel = st.selectbox("Categoría", ["Vestido", "Bolso", "Tenis", "Blusa", "Cosméticos", "Accesorios", "Otra"], label_visibility="collapsed", key="compra_cat")
-                        categoria = st.text_input("Escribe categoría", placeholder="Categoría...", key="compra_cat_otra") if cat_sel == "Otra" else cat_sel
+                        cat_sel = st.selectbox("Categoría", ["Vestido", "Bolso", "Tenis", "Blusa", "Cosméticos", "Accesorios", "Otra"], label_visibility="collapsed", key=f"compra_cat_{_cn}")
+                        categoria = st.text_input("Escribe categoría", placeholder="Categoría...", key=f"compra_cat_otra_{_cn}") if cat_sel == "Otra" else cat_sel
 
                     st.markdown('<p class="section-title">4. Producto / Artículo</p>', unsafe_allow_html=True)
-                    producto = st.text_input("Producto", placeholder="Ej. Vestido estampado", label_visibility="collapsed", key="compra_prod")
+                    producto = st.text_input("Producto", placeholder="Ej. Vestido estampado", label_visibility="collapsed", key=f"compra_prod_{_cn}")
 
                     col_c, col_d = st.columns(2)
                     with col_c:
                         st.markdown('<p class="section-title">5. Precio (₡ CRC)</p>', unsafe_allow_html=True)
-                        precio = st.number_input("Precio", min_value=0.0, value=15000.0, step=500.0, label_visibility="collapsed", key="compra_precio")
+                        precio = st.number_input("Precio", min_value=0.0, value=15000.0, step=500.0, label_visibility="collapsed", key=f"compra_precio_{_cn}")
                     with col_d:
                         st.markdown('<p class="section-title">6. Cantidad</p>', unsafe_allow_html=True)
-                        cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1, label_visibility="collapsed", key="compra_cant")
+                        cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1, label_visibility="collapsed", key=f"compra_cant_{_cn}")
 
                     st.markdown('<p class="section-title">7. Estado del producto</p>', unsafe_allow_html=True)
-                    estado = st.selectbox("Estado", ["🇺🇸 Comprado en USA", "📦 En tránsito", "🇨🇷 Recibido en CR", "✅ Entregado"], label_visibility="collapsed", key="compra_estado")
+                    estado = st.selectbox("Estado", ["🇺🇸 Comprado en USA", "📦 En tránsito", "🇨🇷 Recibido en CR", "✅ Entregado"], label_visibility="collapsed", key=f"compra_estado_{_cn}")
 
                     st.markdown('<p class="section-title">8. Fotos del producto</p>', unsafe_allow_html=True)
-                    metodo_foto = st.radio("Cargar foto desde:", ["Subir archivo", "Usar cámara"], horizontal=True, key="compra_foto_modo")
-                    uk = st.session_state.get("uploader_key", 0)
+                    metodo_foto = st.radio("Cargar foto desde:", ["Subir archivo", "Usar cámara"], horizontal=True, key=f"compra_foto_modo_{_cn}")
+                    uk = _cn
                     foto_file = st.file_uploader("Subir foto", type=["jpg", "png", "jpeg"], label_visibility="collapsed", key=f"compra_file_{uk}") if metodo_foto == "Subir archivo" else st.camera_input("Tomar foto", key=f"compra_cam_{uk}")
 
                     st.markdown('<p class="section-title">9. Observaciones</p>', unsafe_allow_html=True)
-                    observaciones = st.text_area("Observaciones", height=70, label_visibility="collapsed", key="compra_obs")
+                    observaciones = st.text_area("Observaciones", height=70, label_visibility="collapsed", key=f"compra_obs_{_cn}")
 
                     st.write("")
                     if st.button("💾 Guardar compra", key="btn_save_compra"):
@@ -3766,13 +3768,7 @@ elif st.session_state.user_role == "admin":
                             # Guardar datos para mostrar la factura después del rerun
                             st.session_state["compra_post"] = {"id": id_cliente, "prod": prod_clean}
 
-                            # Limpiar los widgets del formulario (menos el cliente/filtro y el aviso de éxito)
-                            _conservar = {"compra_cli", "compra_filtro_cli", "compra_post"}
-                            for _k in [k for k in list(st.session_state.keys())
-                                       if str(k).startswith("compra_") and k not in _conservar]:
-                                del st.session_state[_k]
-
-                            # Forzar un uploader/cámara nuevo
+                            # Subir el contador: todos los campos (y la foto) arrancan en blanco
                             st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1
                             st.rerun()
 
@@ -4094,7 +4090,17 @@ elif st.session_state.user_role == "admin":
                                 st.rerun()
                         with col_btn2:
                             if st.button("🗑 Eliminar Pedido", key="btn_eliminar_pedido"):
+                                # Se leen los datos antes de borrar para poder avisarle a la clienta
+                                _ped = c.execute("SELECT id_cliente, descripcion, tienda, precio, cantidad FROM productos WHERE id = ?", (id_pedido_actual,)).fetchone()
                                 c.execute("DELETE FROM productos WHERE id=?", (id_pedido_actual,))
+                                if _ped and _ped[0]:
+                                    _cant_el = int(_ped[4] or 1)
+                                    _tot_el = float(_ped[3] or 0.0) * _cant_el
+                                    _tienda_el = f" ({_ped[2]})" if _ped[2] else ""
+                                    c.execute("INSERT INTO notificaciones (id_cliente, titulo, mensaje, fecha) VALUES (?, ?, ?, ?)",
+                                              (_ped[0], "Pedido eliminado",
+                                               f"Se eliminó '{_ped[1]}'{_tienda_el} de tus compras (₡{_tot_el:,.0f}).",
+                                               datetime.now().strftime("%Y-%m-%d %H:%M")))
                                 conn.commit()
                                 st.session_state.gestor_msg = f"Pedido #{id_pedido_actual} eliminado."
                                 st.session_state.gestor_cargado_id = None

@@ -4084,6 +4084,21 @@ elif st.session_state.user_role == "admin":
                                     SET tienda = ?, categoria = ?, descripcion = ?, cantidad = ?, precio = ?, estado = ?
                                     WHERE id = ?
                                 """, (cap1(nueva_tienda), cap1(nueva_categoria), cap1(nueva_descripcion), nueva_cantidad, nuevo_precio, nuevo_estado, id_pedido_actual))
+                                # Avisos a la clienta según lo que cambió (fila_actual trae los valores anteriores)
+                                _ahora_n = datetime.now().strftime("%Y-%m-%d %H:%M")
+                                _nom_ped = cap1(nueva_descripcion) or str(fila_actual["descripcion"])
+                                _estado_ant = fila_actual["estado"] if pd.notna(fila_actual["estado"]) and fila_actual["estado"] else "Pendiente"
+                                _precio_ant = float(fila_actual["precio"]) if pd.notna(fila_actual["precio"]) else 0.0
+                                _cant_ant = int(fila_actual["cantidad"]) if pd.notna(fila_actual["cantidad"]) else 1
+                                if nuevo_estado != _estado_ant:
+                                    c.execute("INSERT INTO notificaciones (id_cliente, titulo, mensaje, fecha) VALUES (?, ?, ?, ?)",
+                                              (id_cli_gest, "Estado de tu pedido actualizado",
+                                               f"'{_nom_ped}' pasó de «{_estado_ant}» a «{nuevo_estado}».", _ahora_n))
+                                if float(nuevo_precio) != _precio_ant or int(nueva_cantidad) != _cant_ant:
+                                    c.execute("INSERT INTO notificaciones (id_cliente, titulo, mensaje, fecha) VALUES (?, ?, ?, ?)",
+                                              (id_cli_gest, "Tu pedido fue modificado",
+                                               f"'{_nom_ped}': antes {_cant_ant} × ₡{_precio_ant:,.0f} = ₡{_cant_ant * _precio_ant:,.0f}; "
+                                               f"ahora {int(nueva_cantidad)} × ₡{float(nuevo_precio):,.0f} = ₡{int(nueva_cantidad) * float(nuevo_precio):,.0f}.", _ahora_n))
                                 conn.commit()
                                 st.session_state.gestor_msg = f"¡Pedido #{id_pedido_actual} actualizado exitosamente!"
                                 st.session_state.gestor_cargado_id = None
@@ -4488,14 +4503,27 @@ elif st.session_state.user_role == "client":
         col_m2.metric("Total Abonado", f"₡{total_abonos:,.0f}")
         col_m3.metric("Saldo Pendiente", f"₡{max(0.0, saldo_pendiente):,.0f}")
 
-    notifs = pd.read_sql("SELECT titulo, mensaje, fecha FROM notificaciones WHERE id_cliente = ? ORDER BY id DESC LIMIT 5", conn, params=(id_cli,))
-    if not notifs.empty:
+    # Limpieza: se borran las ya leídas con más de 60 días
+    c.execute("DELETE FROM notificaciones WHERE id_cliente = ? AND COALESCE(leida, 0) = 1 AND fecha < date('now', '-60 days')", (id_cli,))
+    conn.commit()
+    notifs_nuevas = c.execute("SELECT titulo, mensaje, fecha FROM notificaciones WHERE id_cliente = ? AND COALESCE(leida, 0) = 0 ORDER BY id DESC LIMIT 50", (id_cli,)).fetchall()
+    notifs_ant = c.execute("SELECT titulo, mensaje, fecha FROM notificaciones WHERE id_cliente = ? AND COALESCE(leida, 0) = 1 ORDER BY id DESC LIMIT 15", (id_cli,)).fetchall()
+    if notifs_nuevas:
         with card():
-            st.markdown("<h4 style='color:var(--raspberry);'>🔔 Notificaciones Recientes</h4>", unsafe_allow_html=True)
-            for _, row in notifs.iterrows():
-                st.markdown(f"**{row['titulo']}** ({row['fecha']})")
-                st.caption(row["mensaje"])
+            st.markdown(f"<h4 style='color:var(--raspberry);'>🔔 {len(notifs_nuevas)} notificación{'es' if len(notifs_nuevas) != 1 else ''} nueva{'s' if len(notifs_nuevas) != 1 else ''}</h4>", unsafe_allow_html=True)
+            for _titulo, _mensaje, _fecha in notifs_nuevas:
+                st.markdown(f"**{_titulo}** ({_fecha})")
+                st.caption(_mensaje)
                 st.divider()
+            if st.button("✅ Marcar como leídas", key="btn_notif_leidas"):
+                c.execute("UPDATE notificaciones SET leida = 1 WHERE id_cliente = ? AND COALESCE(leida, 0) = 0", (id_cli,))
+                conn.commit()
+                st.rerun()
+    if notifs_ant:
+        with st.expander(f"📭 Ver notificaciones anteriores ({len(notifs_ant)})"):
+            for _titulo, _mensaje, _fecha in notifs_ant:
+                st.markdown(f"**{_titulo}** ({_fecha})")
+                st.caption(_mensaje)
 
     with card():
         st.markdown("<h4 style='color:var(--raspberry);'>📦 Tus Pedidos / Artículos</h4>", unsafe_allow_html=True)

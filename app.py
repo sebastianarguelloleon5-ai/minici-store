@@ -3857,7 +3857,7 @@ elif st.session_state.user_role == "admin":
             
                 id_cli_exp = None
                 if not clientas_todas.empty:
-                    evento_seleccion = st.dataframe(clientas_todas, hide_index=True, on_select="rerun", selection_mode="single-row", key="df_dir_clientas")
+                    evento_seleccion = st.dataframe(clientas_todas, hide_index=True, on_select="rerun", selection_mode="single-row", key=f"df_dir_clientas_{st.session_state.get('dir_cli_n', 0)}")
 
                     selected_rows = []
                     if isinstance(evento_seleccion, dict):
@@ -3923,6 +3923,72 @@ elif st.session_state.user_role == "admin":
                                                   (id_cli_exp, edit_nombre_caja, edit_precio_caja))
                                         conn.commit()
                                         flash("success", "¡Caja actualizada!")
+                                        st.rerun()
+
+                            st.write("")
+                            with card("sub"):
+                                _es_emp = id_cli_exp.startswith("EMP-")
+                                _pref_nuevo = "MIN-" if _es_emp else "EMP-"
+                                st.markdown(f"🔄 **Cambiar tipo de cliente:** hoy es {'💼 Emprendedor (EMP)' if _es_emp else '🌸 Clienta Regular (MIN)'}")
+                                st.caption("Conserva sus pedidos, abonos, notificaciones e historial; solo cambia su código.")
+                                if _es_emp:
+                                    st.warning("Al pasar a Clienta Regular se quita su caja de emprendedor y deja de sumarse a su saldo.")
+                                    _caja_nueva, _precio_nuevo = None, 0.0
+                                else:
+                                    st.markdown("💼 **Caja que se le asigna como Emprendedor:**")
+                                    _caja_nueva, _precio_nuevo = selector_talla_caja(f"cambio_cj_{id_cli_exp}")
+                                _ok_tipo = st.checkbox(f"Confirmo el cambio de {id_cli_exp} a {'Clienta Regular' if _es_emp else 'Emprendedor'}", key=f"chk_tipo_{id_cli_exp}")
+                                if st.button("🔄 Cambiar tipo", key=f"btn_tipo_{id_cli_exp}", disabled=not _ok_tipo):
+                                    _ids = [str(r[0]) for r in c.execute("SELECT id_cliente FROM clientes").fetchall()]
+                                    _nums = [int(i.replace(_pref_nuevo, "").strip()) for i in _ids if i.startswith(_pref_nuevo) and i.replace(_pref_nuevo, "").strip().isdigit()]
+                                    _id_nuevo = f"{_pref_nuevo}{(max(_nums) + 1) if _nums else 1:04d}"
+                                    try:
+                                        _tablas = [t[0] for t in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()]
+                                        for _t in _tablas:
+                                            if _t == "cajas_emprendedores":
+                                                continue
+                                            if any(col[1] == "id_cliente" for col in c.execute(f"PRAGMA table_info({_t})").fetchall()):
+                                                c.execute(f"UPDATE {_t} SET id_cliente = ? WHERE id_cliente = ?", (_id_nuevo, id_cli_exp))
+                                        if _es_emp:
+                                            c.execute("DELETE FROM cajas_emprendedores WHERE id_cliente = ?", (id_cli_exp,))
+                                        else:
+                                            c.execute("INSERT OR REPLACE INTO cajas_emprendedores (id_cliente, nombre_caja, precio_caja) VALUES (?, ?, ?)",
+                                                      (_id_nuevo, _caja_nueva or "Caja Asignada", _precio_nuevo))
+                                        conn.commit()
+                                    except Exception as _e:
+                                        conn.rollback()
+                                        st.error(f"No se pudo cambiar el tipo: {_e}")
+                                    else:
+                                        st.session_state["dir_cli_n"] = st.session_state.get("dir_cli_n", 0) + 1
+                                        flash("success", f"{info_cli[0]} ahora es {_id_nuevo}.")
+                                        st.rerun()
+
+                            st.write("")
+                            with card("sub"):
+                                st.markdown("🗑️ **Eliminar este cliente:**")
+                                _n_ped = c.execute("SELECT COUNT(*) FROM productos WHERE id_cliente = ?", (id_cli_exp,)).fetchone()[0]
+                                _n_abo = c.execute("SELECT COUNT(*) FROM abonos WHERE id_cliente = ?", (id_cli_exp,)).fetchone()[0]
+                                _n_apa = c.execute("SELECT COUNT(*) FROM apartados WHERE id_cliente = ? AND estado = 'Activo'", (id_cli_exp,)).fetchone()[0]
+                                if _n_apa:
+                                    st.warning(f"Este cliente tiene {_n_apa} apartado(s) activo(s). Ciérralos o cancélalos antes de eliminarlo.")
+                                else:
+                                    if _n_ped or _n_abo:
+                                        st.warning(f"Tiene {_n_ped} pedido(s) y {_n_abo} abono(s) registrados. Si lo eliminas, se borran también.")
+                                        _ok_datos = st.checkbox("Entiendo que se borrarán sus pedidos y abonos", key=f"chk_del_datos_{id_cli_exp}")
+                                    else:
+                                        st.caption("No tiene pedidos ni abonos registrados.")
+                                        _ok_datos = True
+                                    _ok_cli = st.checkbox(f"Confirmo que quiero eliminar a {info_cli[0]} ({id_cli_exp})", key=f"chk_del_cli_{id_cli_exp}")
+                                    st.caption("Su teléfono y correo quedan libres para volver a registrarse. El historial de ventas del POS no se toca.")
+                                    if st.button("🗑️ Eliminar cliente", key=f"btn_del_cli_{id_cli_exp}", disabled=not (_ok_datos and _ok_cli)):
+                                        c.execute("DELETE FROM notificaciones WHERE id_cliente = ?", (id_cli_exp,))
+                                        c.execute("DELETE FROM abonos WHERE id_cliente = ?", (id_cli_exp,))
+                                        c.execute("DELETE FROM productos WHERE id_cliente = ?", (id_cli_exp,))
+                                        c.execute("DELETE FROM cajas_emprendedores WHERE id_cliente = ?", (id_cli_exp,))
+                                        c.execute("DELETE FROM clientes WHERE id_cliente = ?", (id_cli_exp,))
+                                        conn.commit()
+                                        st.session_state["dir_cli_n"] = st.session_state.get("dir_cli_n", 0) + 1
+                                        flash("success", f"Cliente {info_cli[0]} ({id_cli_exp}) eliminado. Ya puede volver a registrarse.")
                                         st.rerun()
 
                             st.write("")
@@ -4104,7 +4170,8 @@ elif st.session_state.user_role == "admin":
                                 st.session_state.gestor_cargado_id = None
                                 st.rerun()
                         with col_btn2:
-                            if st.button("🗑 Eliminar Pedido", key="btn_eliminar_pedido"):
+                            _ok_del_ped = st.checkbox("Confirmo que quiero eliminar este pedido", key=f"chk_del_ped_{id_pedido_actual}")
+                            if st.button("🗑 Eliminar Pedido", key="btn_eliminar_pedido", disabled=not _ok_del_ped):
                                 # Se leen los datos antes de borrar para poder avisarle a la clienta
                                 _ped = c.execute("SELECT id_cliente, descripcion, tienda, precio, cantidad FROM productos WHERE id = ?", (id_pedido_actual,)).fetchone()
                                 c.execute("DELETE FROM productos WHERE id=?", (id_pedido_actual,))

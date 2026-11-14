@@ -3669,6 +3669,11 @@ elif st.session_state.user_role == "admin":
             if _post:
                 with card():
                     st.success(f"¡Compra de '{_post['prod']}' registrada exitosamente para {_post['id']}!")
+                    if _post.get("abono"):
+                        _cargos = c.execute("SELECT COALESCE(SUM(precio * COALESCE(cantidad, 1)), 0) FROM productos WHERE id_cliente = ?", (_post["id"],)).fetchone()[0]
+                        _caja = c.execute("SELECT COALESCE(SUM(precio_caja), 0) FROM cajas_emprendedores WHERE id_cliente = ?", (_post["id"],)).fetchone()[0]
+                        _abonado = c.execute("SELECT COALESCE(SUM(monto_crc), 0) FROM abonos WHERE id_cliente = ?", (_post["id"],)).fetchone()[0]
+                        st.info(f"💰 Abono registrado: ₡{_post['abono']:,.0f}. Saldo pendiente de la cuenta: ₡{max(0.0, _cargos + _caja - _abonado):,.0f}")
                     path_fac, link_wa = generar_factura_imagen(_post["id"])
                     if path_fac and os.path.exists(path_fac):
                         with open(path_fac, "rb") as file:
@@ -3689,7 +3694,10 @@ elif st.session_state.user_role == "admin":
             _cn = st.session_state.get("uploader_key", 0)  # contador: cambia en cada guardado y reinicia todos los campos
 
             with card():
-            
+                modo_compra = st.radio("Modo de registro:", ["⚡ Rápido (foto, cliente, total y abono)", "📝 Completo (tienda, categoría, estado…)"],
+                                       horizontal=True, key="compra_modo")
+                es_rapido = modo_compra.startswith("⚡")
+
                 filtro_tipo_cli = st.radio("Filtrar Tipo de Cliente:", ["Todos", "Clientas Regulares (MIN)", "Emprendedores (EMP)"], horizontal=True, key="compra_filtro_cli")
             
                 query_cli = """SELECT c.id_cliente || ' — ' || c.nombre || COALESCE(' (' || e.nombre_caja || ')', '') AS display, c.id_cliente 
@@ -3709,48 +3717,79 @@ elif st.session_state.user_role == "admin":
                     cli_selected = st.selectbox("Cliente", clientes_df["display"], label_visibility="collapsed", key="compra_cli")
                     id_cliente = clientes_df[clientes_df["display"] == cli_selected]["id_cliente"].values[0]
 
-                    col_tienda, col_cat = st.columns(2)
-                    with col_tienda:
-                        st.markdown('<p class="section-title">2. Tienda</p>', unsafe_allow_html=True)
-                        tienda_sel = st.selectbox("Tienda", ["Zara", "Guess", "Adidas", "Shein", "Amazon", "Nike", "Victoria's Secret", "Otra"], label_visibility="collapsed", key=f"compra_tienda_{_cn}")
-                        tienda = st.text_input("Escribe tienda", placeholder="Tienda...", key=f"compra_tienda_otra_{_cn}") if tienda_sel == "Otra" else tienda_sel
+                    if es_rapido:
+                        st.markdown('<p class="section-title">2. Foto del producto</p>', unsafe_allow_html=True)
+                        metodo_foto = st.radio("Cargar foto desde:", ["Subir archivo", "Usar cámara"], horizontal=True, key=f"compra_foto_modo_{_cn}")
+                        foto_file = st.file_uploader("Subir foto", type=["jpg", "png", "jpeg"], label_visibility="collapsed", key=f"compra_file_{_cn}") if metodo_foto == "Subir archivo" else st.camera_input("Tomar foto", key=f"compra_cam_{_cn}")
 
-                    with col_cat:
-                        st.markdown('<p class="section-title">3. Categoría</p>', unsafe_allow_html=True)
-                        cat_sel = st.selectbox("Categoría", ["Vestido", "Bolso", "Tenis", "Blusa", "Cosméticos", "Accesorios", "Otra"], label_visibility="collapsed", key=f"compra_cat_{_cn}")
-                        categoria = st.text_input("Escribe categoría", placeholder="Categoría...", key=f"compra_cat_otra_{_cn}") if cat_sel == "Otra" else cat_sel
+                        st.markdown('<p class="section-title">3. Precio total del producto (₡ CRC)</p>', unsafe_allow_html=True)
+                        precio = st.number_input("Precio total", min_value=0.0, value=0.0, step=500.0, label_visibility="collapsed", key=f"compra_precio_rap_{_cn}")
+                        cantidad = 1
+                        producto = st.text_input("Descripción (opcional)", placeholder="Descripción (opcional)", label_visibility="collapsed", key=f"compra_desc_rap_{_cn}")
+                        tienda, categoria, observaciones = "", "", ""
+                        estado = "🇺🇸 Comprado en USA"
+                        _n_abono = "4"
+                    else:
+                        col_tienda, col_cat = st.columns(2)
+                        with col_tienda:
+                            st.markdown('<p class="section-title">2. Tienda</p>', unsafe_allow_html=True)
+                            tienda_sel = st.selectbox("Tienda", ["Zara", "Guess", "Adidas", "Shein", "Amazon", "Nike", "Victoria's Secret", "Otra"], label_visibility="collapsed", key=f"compra_tienda_{_cn}")
+                            tienda = st.text_input("Escribe tienda", placeholder="Tienda...", key=f"compra_tienda_otra_{_cn}") if tienda_sel == "Otra" else tienda_sel
 
-                    st.markdown('<p class="section-title">4. Producto / Artículo</p>', unsafe_allow_html=True)
-                    producto = st.text_input("Producto", placeholder="Ej. Vestido estampado", label_visibility="collapsed", key=f"compra_prod_{_cn}")
+                        with col_cat:
+                            st.markdown('<p class="section-title">3. Categoría</p>', unsafe_allow_html=True)
+                            cat_sel = st.selectbox("Categoría", ["Vestido", "Bolso", "Tenis", "Blusa", "Cosméticos", "Accesorios", "Otra"], label_visibility="collapsed", key=f"compra_cat_{_cn}")
+                            categoria = st.text_input("Escribe categoría", placeholder="Categoría...", key=f"compra_cat_otra_{_cn}") if cat_sel == "Otra" else cat_sel
 
-                    col_c, col_d = st.columns(2)
-                    with col_c:
-                        st.markdown('<p class="section-title">5. Precio (₡ CRC)</p>', unsafe_allow_html=True)
-                        precio = st.number_input("Precio", min_value=0.0, value=15000.0, step=500.0, label_visibility="collapsed", key=f"compra_precio_{_cn}")
-                    with col_d:
-                        st.markdown('<p class="section-title">6. Cantidad</p>', unsafe_allow_html=True)
-                        cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1, label_visibility="collapsed", key=f"compra_cant_{_cn}")
+                        st.markdown('<p class="section-title">4. Producto / Artículo</p>', unsafe_allow_html=True)
+                        producto = st.text_input("Producto", placeholder="Ej. Vestido estampado", label_visibility="collapsed", key=f"compra_prod_{_cn}")
 
-                    st.markdown('<p class="section-title">7. Estado del producto</p>', unsafe_allow_html=True)
-                    estado = st.selectbox("Estado", ["🇺🇸 Comprado en USA", "📦 En tránsito", "🇨🇷 Recibido en CR", "✅ Entregado"], label_visibility="collapsed", key=f"compra_estado_{_cn}")
+                        col_c, col_d = st.columns(2)
+                        with col_c:
+                            st.markdown('<p class="section-title">5. Precio (₡ CRC)</p>', unsafe_allow_html=True)
+                            precio = st.number_input("Precio", min_value=0.0, value=15000.0, step=500.0, label_visibility="collapsed", key=f"compra_precio_{_cn}")
+                        with col_d:
+                            st.markdown('<p class="section-title">6. Cantidad</p>', unsafe_allow_html=True)
+                            cantidad = st.number_input("Cantidad", min_value=1, value=1, step=1, label_visibility="collapsed", key=f"compra_cant_{_cn}")
 
-                    st.markdown('<p class="section-title">8. Fotos del producto</p>', unsafe_allow_html=True)
-                    metodo_foto = st.radio("Cargar foto desde:", ["Subir archivo", "Usar cámara"], horizontal=True, key=f"compra_foto_modo_{_cn}")
-                    uk = _cn
-                    foto_file = st.file_uploader("Subir foto", type=["jpg", "png", "jpeg"], label_visibility="collapsed", key=f"compra_file_{uk}") if metodo_foto == "Subir archivo" else st.camera_input("Tomar foto", key=f"compra_cam_{uk}")
+                        st.markdown('<p class="section-title">7. Estado del producto</p>', unsafe_allow_html=True)
+                        estado = st.selectbox("Estado", ["🇺🇸 Comprado en USA", "📦 En tránsito", "🇨🇷 Recibido en CR", "✅ Entregado"], label_visibility="collapsed", key=f"compra_estado_{_cn}")
 
-                    st.markdown('<p class="section-title">9. Observaciones</p>', unsafe_allow_html=True)
-                    observaciones = st.text_area("Observaciones", height=70, label_visibility="collapsed", key=f"compra_obs_{_cn}")
+                        st.markdown('<p class="section-title">8. Fotos del producto</p>', unsafe_allow_html=True)
+                        metodo_foto = st.radio("Cargar foto desde:", ["Subir archivo", "Usar cámara"], horizontal=True, key=f"compra_foto_modo_{_cn}")
+                        foto_file = st.file_uploader("Subir foto", type=["jpg", "png", "jpeg"], label_visibility="collapsed", key=f"compra_file_{_cn}") if metodo_foto == "Subir archivo" else st.camera_input("Tomar foto", key=f"compra_cam_{_cn}")
+
+                        st.markdown('<p class="section-title">9. Observaciones</p>', unsafe_allow_html=True)
+                        observaciones = st.text_area("Observaciones", height=70, label_visibility="collapsed", key=f"compra_obs_{_cn}")
+                        _n_abono = "10"
+
+                    # Abono (SINPE, efectivo o tarjeta) que se registra junto con la compra
+                    st.markdown(f'<p class="section-title">{_n_abono}. Abono recibido ahora (opcional)</p>', unsafe_allow_html=True)
+                    abono_inicial = st.number_input("Abono (₡ CRC)", min_value=0.0, value=0.0, step=1000.0, label_visibility="collapsed", key=f"compra_abono_{_cn}")
+                    metodo_abono, ref_abono = "SINPE Móvil", ""
+                    if abono_inicial > 0:
+                        metodo_abono = _metodo_de(st.radio("Método del abono:", _OPC_PAGO, index=2, horizontal=True, key=f"compra_abono_met_{_cn}"))
+                        if metodo_abono != "Efectivo":
+                            ref_abono = st.text_input(_hint_referencia(metodo_abono), key=f"compra_abono_ref_{_cn}_{metodo_abono}")
+                        st.caption(f"Saldo de este producto: ₡{max(0.0, precio * cantidad - abono_inicial):,.0f}")
 
                     st.write("")
                     if st.button("💾 Guardar compra", key="btn_save_compra"):
-                        if not producto or not tienda or not categoria:
+                        total_producto = precio * cantidad
+                        if es_rapido and not (foto_file or producto.strip()):
+                            st.error("Agrega la foto del producto (o una descripción).")
+                        elif es_rapido and precio <= 0:
+                            st.error("Escribe el precio total del producto.")
+                        elif not es_rapido and (not producto or not tienda or not categoria):
                             st.error("Debes completar el producto, la tienda y la categoría.")
+                        elif abono_inicial > total_producto:
+                            st.error(f"El abono (₡{abono_inicial:,.0f}) no puede ser mayor que el total (₡{total_producto:,.0f}). Si el cliente paga de más, regístralo en 'Registrar Abonos'.")
                         else:
-                            prod_clean = cap1(producto)
-                            tienda_clean = cap1(tienda)
-                            cat_clean = cap1(categoria)
+                            prod_clean = cap1(producto) if producto.strip() else "Producto"
+                            tienda_clean = cap1(tienda) if tienda else "—"
+                            cat_clean = cap1(categoria) if categoria else "General"
                             obs_clean = cap1(observaciones) if observaciones else ""
+                            ahora_str = datetime.now().strftime("%Y-%m-%d %H:%M")
 
                             foto_filename = ""
                             if foto_file:
@@ -3762,11 +3801,17 @@ elif st.session_state.user_role == "admin":
                             c.execute("""INSERT INTO productos (id_cliente, tienda, categoria, descripcion, precio, moneda, cantidad, estado, observaciones, foto_path)
                                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                                       (id_cliente, tienda_clean, cat_clean, prod_clean, precio, "CRC", cantidad, estado, obs_clean, foto_filename))
+                            _donde = f" ({tienda_clean})" if tienda else ""
                             c.execute("""INSERT INTO notificaciones (id_cliente, titulo, mensaje, fecha) VALUES (?, ?, ?, ?)""",
-                                      (id_cliente, "Nuevo pedido registrado", f"Se agregó '{prod_clean}' ({tienda_clean}) a tus compras por ₡{precio:,.0f}.", datetime.now().strftime("%Y-%m-%d %H:%M")))
+                                      (id_cliente, "Nuevo pedido registrado", f"Se agregó '{prod_clean}'{_donde} a tus compras por ₡{total_producto:,.0f}.", ahora_str))
+                            if abono_inicial > 0:
+                                c.execute("INSERT INTO abonos (id_cliente, monto_crc, fecha, metodo_pago, referencia) VALUES (?, ?, ?, ?, ?)",
+                                          (id_cliente, abono_inicial, ahora_str, metodo_abono, ref_abono.strip() or None))
+                                c.execute("""INSERT INTO notificaciones (id_cliente, titulo, mensaje, fecha) VALUES (?, ?, ?, ?)""",
+                                          (id_cliente, "Abono registrado", f"Recibimos tu abono de ₡{abono_inicial:,.0f} ({metodo_abono}) para '{prod_clean}'.", ahora_str))
                             conn.commit()
                             # Guardar datos para mostrar la factura después del rerun
-                            st.session_state["compra_post"] = {"id": id_cliente, "prod": prod_clean}
+                            st.session_state["compra_post"] = {"id": id_cliente, "prod": prod_clean, "abono": abono_inicial}
 
                             # Subir el contador: todos los campos (y la foto) arrancan en blanco
                             st.session_state["uploader_key"] = st.session_state.get("uploader_key", 0) + 1

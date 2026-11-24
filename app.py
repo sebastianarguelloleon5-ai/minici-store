@@ -3299,6 +3299,38 @@ def _solo_digitos(texto):
     return "".join(ch for ch in str(texto or "") if ch.isdigit())
 
 
+# ---------- Aviso automático por WhatsApp a la administradora (CallMeBot) ----------
+WHATSAPP_ADMIN_DEFAULT = "50664024090"  # +506 6402 4090
+
+
+def _enviar_whatsapp_admin(texto, apikey, telefono):
+    """Envía un WhatsApp a la administradora con CallMeBot. Devuelve (ok, detalle)."""
+    try:
+        params = urllib.parse.urlencode({"phone": "+" + _solo_digitos(telefono), "text": texto, "apikey": apikey})
+        with urllib.request.urlopen(f"https://api.callmebot.com/whatsapp.php?{params}", timeout=20) as r:
+            cuerpo = r.read().decode("utf-8", "ignore")
+        return r.status == 200, cuerpo
+    except Exception as e:
+        return False, str(e)
+
+
+def _config_aviso_wa():
+    """(clave, teléfono) del aviso por WhatsApp: primero lo guardado en la app, luego los Secrets."""
+    apikey = (cfg_get("callmebot_apikey", "") or "").strip() or _secret("CALLMEBOT_APIKEY")
+    telefono = (cfg_get("admin_whatsapp", "") or "").strip() or _secret("ADMIN_WHATSAPP", WHATSAPP_ADMIN_DEFAULT)
+    return (str(apikey).strip() if apikey else None), telefono
+
+
+def notificar_registro_nuevo(nombre, codigo):
+    """Avisa por WhatsApp (en segundo plano) que alguien se registró solo: nombre y código.
+    Si no hay clave de CallMeBot configurada, no hace nada y el registro sigue normal."""
+    apikey, telefono = _config_aviso_wa()
+    if not apikey:
+        return
+    texto = f"🆕 Nuevo registro por link\nNombre: {nombre}\nCódigo: {codigo}"
+    threading.Thread(target=_enviar_whatsapp_admin, args=(texto, str(apikey), telefono), daemon=True).start()
+
+
 def _normalizar_telefono(texto):
     d = _solo_digitos(texto)
     if len(d) == 11 and d.startswith("506"):
@@ -3450,6 +3482,7 @@ def pagina_registro_publico(token_url):
                         except sqlite3.IntegrityError:
                             conn.rollback()
                     if nuevo_id:
+                        notificar_registro_nuevo(nombre.strip().title(), nuevo_id)
                         st.session_state["pub_conteo"] = st.session_state.get("pub_conteo", 0) + 1
                         st.session_state["pub_ok"] = {"nombre": nombre.strip().title(), "id": nuevo_id,
                                                       "detalle": nombre_caja_in if es_emp else ""}
@@ -3486,6 +3519,30 @@ def panel_link_registro():
         if nuevo_emp != emp_ok:
             cfg_set("registro_emp_activo", "1" if nuevo_emp else "0")
             st.rerun()
+
+        st.markdown("🔔 **Aviso por WhatsApp de cada registro nuevo**")
+        apikey_wa, tel_wa = _config_aviso_wa()
+        st.caption("Para activarlo (solo una vez): desde tu WhatsApp guarda el contacto +34 644 51 95 23 y mándale el mensaje "
+                   "«I allow callmebot to send me messages». Te responde con una clave; pégala aquí abajo.")
+        wa_c1, wa_c2 = st.columns(2)
+        with wa_c1:
+            tel_in = st.text_input("Tu número de WhatsApp (con código de país)", value=tel_wa or "", key="inp_wa_tel")
+        with wa_c2:
+            key_in = st.text_input("Clave de CallMeBot", value=apikey_wa or "", type="password", key="inp_wa_key")
+        wb1, wb2 = st.columns(2)
+        with wb1:
+            if st.button("💾 Guardar aviso", key="btn_guardar_wa"):
+                cfg_set("admin_whatsapp", _solo_digitos(tel_in))
+                cfg_set("callmebot_apikey", key_in.strip())
+                st.success("Guardado.")
+        with wb2:
+            if st.button("Enviar mensaje de prueba", key="btn_prueba_wa"):
+                if not key_in.strip() or not _solo_digitos(tel_in):
+                    st.error("Escribe el número y la clave primero.")
+                else:
+                    ok, det = _enviar_whatsapp_admin("✅ Prueba de aviso de Minici Store", key_in.strip(), tel_in)
+                    st.success("Mensaje enviado. Revisa tu WhatsApp.") if ok else st.error(f"No se pudo enviar: {det[:200]}")
+        st.caption("🔔 Activado." if apikey_wa else "🔕 Sin activar: falta la clave.")
 
         url_in = st.text_input("Dirección de tu app", value=base, placeholder="https://tu-app.streamlit.app", key="inp_url_base")
         if st.button("💾 Guardar dirección", key="btn_url_base") and url_in.strip():

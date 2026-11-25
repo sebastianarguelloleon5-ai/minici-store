@@ -3491,6 +3491,99 @@ def pagina_registro_publico(token_url):
                         st.error("No se pudo completar el registro. Intenta de nuevo en unos segundos.")
 
 
+# ---------- Registros nuevos por link: lista, contador y aviso dentro de la app ----------
+def _max_rowid_link():
+    r = c.execute("SELECT MAX(rowid) FROM clientes WHERE origen = 'link'").fetchone()
+    return (r[0] or 0) if r else 0
+
+
+def _reg_visto():
+    """Último registro por link que la administradora ya vio (la primera vez, todo lo anterior cuenta como visto)."""
+    v = cfg_get("reg_visto_rowid")
+    if v is None:
+        v = _max_rowid_link()
+        cfg_set("reg_visto_rowid", v)
+    try:
+        return int(v)
+    except Exception:
+        return 0
+
+
+def _registros_nuevos():
+    return c.execute("SELECT rowid, id_cliente, nombre, telefono, fecha_registro FROM clientes "
+                     "WHERE origen = 'link' AND rowid > ? ORDER BY rowid DESC", (_reg_visto(),)).fetchall()
+
+
+def _mostrar_alerta_registro():
+    """Si el vigilante detectó registros nuevos: mensaje en pantalla, pitido y notificación del navegador (si hay permiso)."""
+    filas = st.session_state.pop("reg_alerta", None)
+    if not filas:
+        return
+    import streamlit.components.v1 as components
+    resumen = ", ".join(f"{n} ({cod})" for cod, n in filas[:3]) + (f" y {len(filas) - 3} más" if len(filas) > 3 else "")
+    st.toast(f"🆕 Nuevo registro: {resumen}", icon="🆕")
+    _pitido(True, int(time.time() * 1000))
+    components.html("""<script>
+      (function () { try {
+        var N = (window.parent && window.parent.Notification) || window.Notification;
+        if (N && N.permission === 'granted') { new N('🆕 Nuevo registro en Minici Store', {body: %s}); }
+      } catch (e) {} })();
+    </script>""" % json.dumps(resumen), height=0)
+
+
+def _vigilar_registros():
+    """Cada pocos segundos revisa si alguien se registró por el link y, si es así, avisa."""
+    maximo = _max_rowid_link()
+    avisado = st.session_state.get("reg_avisado")
+    st.session_state["reg_avisado"] = maximo if avisado is None else max(avisado, maximo)
+    if avisado is None or maximo <= avisado:
+        return
+    filas = c.execute("SELECT id_cliente, nombre FROM clientes WHERE origen = 'link' AND rowid > ? ORDER BY rowid", (avisado,)).fetchall()
+    if filas:
+        st.session_state["reg_alerta"] = filas
+        try:
+            st.rerun(scope="app")
+        except TypeError:
+            st.rerun()
+
+
+_fragmento = getattr(st, "fragment", None)
+if _fragmento is not None:
+    try:
+        _vigilar_registros = _fragmento(run_every=20)(_vigilar_registros)
+    except Exception:
+        pass
+
+
+def campana_notificaciones():
+    """Campanita con el número de notificaciones sin ver; al tocarla se abre la lista."""
+    import streamlit.components.v1 as components
+    nuevos = _registros_nuevos()
+    n = len(nuevos)
+    etiqueta = f"🔔 {n}" if n else "🔔"
+    contenedor = getattr(st, "popover", None)
+    caja = contenedor(etiqueta, help="Notificaciones") if contenedor else st.expander(etiqueta)
+    with caja:
+        st.markdown("**Notificaciones**")
+        if not nuevos:
+            st.caption("No tienes notificaciones nuevas.")
+        for _rid, cod, nombre_n, tel_n, fecha_n in nuevos:
+            st.markdown(f"🆕 **{html.escape(str(nombre_n))}** se registró por el link  \n"
+                        f"Código: **{html.escape(str(cod))}** · 📞 {html.escape(str(tel_n or '—'))} · {html.escape(str(fecha_n or ''))}")
+            st.divider()
+        if nuevos and st.button("✔️ Marcar todas como vistas", key="btn_reg_vistos"):
+            cfg_set("reg_visto_rowid", max(r[0] for r in nuevos))
+            st.rerun()
+        st.caption("Con la app abierta suena un pitido y sale un aviso cuando alguien se registra. "
+                   "En computadora y Android puedes activar además la notificación del navegador:")
+        components.html("""<button onclick="try{var N=(window.parent&&window.parent.Notification)||window.Notification;
+          if(!N){document.getElementById('m').innerText='Este navegador no permite notificaciones aquí.';return;}
+          N.requestPermission().then(function(p){document.getElementById('m').innerText=
+          p==='granted'?'✅ Activadas':'No se activaron ('+p+')';});}catch(e){document.getElementById('m').innerText='No disponible aquí.';}"
+          style="padding:8px 14px;border-radius:8px;border:0;background:#c2185b;color:#fff;font-size:15px;cursor:pointer">🔔 Activar notificaciones</button>
+          <span id="m" style="margin-left:10px;font-family:sans-serif;font-size:14px"></span>""", height=60)
+
+
 def panel_link_registro():
     """Cuadro del administrador: copiar, compartir, desactivar o cambiar el link de registro."""
     with st.expander("🔗 Link para que clientas y emprendedores se registren solos"):
@@ -3690,6 +3783,11 @@ elif st.session_state.user_role == "admin":
         horizontal=True,
     )
     st.write("")
+    _mostrar_alerta_registro()
+    _vigilar_registros()
+    _, _col_campana = st.columns([6, 1])
+    with _col_campana:
+        campana_notificaciones()
 
     # =========================================================
     # SECCIÓN 1: PANEL PRINCIPAL

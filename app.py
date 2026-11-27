@@ -4044,20 +4044,25 @@ elif st.session_state.user_role == "admin":
             with card():
                 st.markdown("<h4 style='color:var(--raspberry);'>📋 Directorio de Clientes y Emprendedores</h4>", unsafe_allow_html=True)
             
+                solo_con_pedidos = st.checkbox("🛒 Mostrar solo clientes con pedidos", key="dir_solo_pedidos")
                 clientas_todas = pd.read_sql("""
                     SELECT c.id_cliente as Código, c.nombre as Nombre, c.telefono as Teléfono,
                            c.provincia as _prov, c.canton as _cant, c.distrito as _dist,
-                           COALESCE(e.nombre_caja, 'N/A') as 'Caja', COALESCE(e.precio_caja, 0.0) as 'Precio Caja (₡)'
+                           COALESCE(e.nombre_caja, 'N/A') as 'Caja', COALESCE(e.precio_caja, 0.0) as 'Precio Caja (₡)',
+                           COALESCE(pp.n, 0) as 'Pedidos'
                     FROM clientes c 
                     LEFT JOIN cajas_emprendedores e ON c.id_cliente = e.id_cliente 
+                    LEFT JOIN (SELECT id_cliente, COUNT(*) as n FROM productos GROUP BY id_cliente) pp ON c.id_cliente = pp.id_cliente
                     ORDER BY c.id_cliente DESC""", conn)
+                if solo_con_pedidos:
+                    clientas_todas = clientas_todas[clientas_todas["Pedidos"] > 0].reset_index(drop=True)
                 clientas_todas.insert(3, "Ubicación", [texto_ubicacion(a_, b_, c_) or "— sin dirección —"
                                                        for a_, b_, c_ in zip(clientas_todas["_prov"], clientas_todas["_cant"], clientas_todas["_dist"])])
                 clientas_todas = clientas_todas.drop(columns=["_prov", "_cant", "_dist"])
             
                 id_cli_exp = None
                 if not clientas_todas.empty:
-                    evento_seleccion = st.dataframe(clientas_todas, hide_index=True, on_select="rerun", selection_mode="single-row", key=f"df_dir_clientas_{st.session_state.get('dir_cli_n', 0)}")
+                    evento_seleccion = st.dataframe(clientas_todas, hide_index=True, on_select="rerun", selection_mode="single-row", key=f"df_dir_clientas_{st.session_state.get('dir_cli_n', 0)}_{int(bool(solo_con_pedidos))}")
 
                     selected_rows = []
                     if isinstance(evento_seleccion, dict):
@@ -4245,13 +4250,45 @@ elif st.session_state.user_role == "admin":
             if mensaje_flash:
                 st.success(mensaje_flash)
 
-            cli_pedidos = pd.read_sql("SELECT DISTINCT p.id_cliente, c.nombre FROM productos p JOIN clientes c ON p.id_cliente = c.id_cliente WHERE p.id_cliente IS NOT NULL AND p.id_cliente != ''", conn)
+            resumen_cli = pd.read_sql("""
+                SELECT p.id_cliente AS id_cliente, c.nombre AS nombre, COUNT(*) AS pedidos,
+                       SUM(CASE WHEN COALESCE(p.estado, 'Pendiente') != '✅ Entregado' THEN 1 ELSE 0 END) AS sin_entregar,
+                       SUM(COALESCE(p.precio, 0.0) * COALESCE(p.cantidad, 1)) AS total, MAX(p.id) AS ultimo
+                FROM productos p JOIN clientes c ON p.id_cliente = c.id_cliente
+                WHERE p.id_cliente IS NOT NULL AND p.id_cliente != ''
+                GROUP BY p.id_cliente, c.nombre ORDER BY ultimo DESC""", conn)
+            cli_pedidos = resumen_cli[["id_cliente", "nombre"]]
 
             with card():
                 if cli_pedidos.empty:
                     st.info("No hay encargos asignados a clientes específicos.")
                 else:
                     dict_cli_p = {f"{r['id_cliente']} — {r['nombre']}": r['id_cliente'] for _, r in cli_pedidos.iterrows()}
+
+                    # --- Clientes que han comprado (el último pedido primero): al tocar uno se abren sus pedidos ---
+                    st.markdown(f"**🛒 Clientes con pedidos ({len(resumen_cli)})**")
+                    st.caption("Toca un cliente para abrir sus pedidos.")
+                    vista_cli = resumen_cli.assign(total=resumen_cli["total"].fillna(0.0))[["id_cliente", "nombre", "pedidos", "sin_entregar", "total"]].rename(
+                        columns={"id_cliente": "Código", "nombre": "Nombre", "pedidos": "Pedidos", "sin_entregar": "Sin entregar", "total": "Total (₡)"})
+                    ev_cli = st.dataframe(vista_cli, hide_index=True, on_select="rerun", selection_mode="single-row",
+                                          key="gestor_tabla_clientes",
+                                          column_config={"Total (₡)": st.column_config.NumberColumn(format="₡%d")})
+                    filas_cli = []
+                    sel_cli = getattr(ev_cli, "selection", None)
+                    if sel_cli is None and isinstance(ev_cli, dict):
+                        sel_cli = ev_cli.get("selection")
+                    if isinstance(sel_cli, dict):
+                        filas_cli = sel_cli.get("rows", [])
+                    elif sel_cli is not None:
+                        filas_cli = getattr(sel_cli, "rows", [])
+                    if filas_cli and filas_cli[0] < len(resumen_cli):
+                        _fila_c = resumen_cli.iloc[filas_cli[0]]
+                        if st.session_state.get("gestor_cli_ultima") != _fila_c["id_cliente"]:
+                            st.session_state["gestor_cli_ultima"] = _fila_c["id_cliente"]
+                            st.session_state["gestor_cli_sel"] = f"{_fila_c['id_cliente']} — {_fila_c['nombre']}"
+                    else:
+                        st.session_state.pop("gestor_cli_ultima", None)
+
                     if st.session_state.get("gestor_cli_sel") not in dict_cli_p:
                         st.session_state.pop("gestor_cli_sel", None)
                     cli_p_sel = st.selectbox("Cliente", list(dict_cli_p.keys()), key="gestor_cli_sel")
